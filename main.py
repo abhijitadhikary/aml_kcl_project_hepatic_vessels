@@ -119,7 +119,7 @@ for index_epoch in tqdm(range(num_epochs), leave=False):
             images, labels = batch
             images, labels = images.to(device), labels.to(device)
 
-            labels_reconstructed = stride_depth_and_inference(model=model,
+            labels_pred = stride_depth_and_inference(model=model,
                                                               optimizer=optimizer,
                                                               criterion=criterion_dice,
                                                               images_real=images,
@@ -127,15 +127,6 @@ for index_epoch in tqdm(range(num_epochs), leave=False):
                                                               patch_size_low=19,
                                                               patch_size_out=9,
                                                               patch_low_factor=3)
-
-            # images_expanded[:, paddint_amount:paddint_amount + height, paddint_amount:paddint_amount + width,paddint_amount:paddint_amount + depth]
-
-            # expand
-
-
-            # extract the three patches
-
-            # forward pass
 
             # calculate loss
 

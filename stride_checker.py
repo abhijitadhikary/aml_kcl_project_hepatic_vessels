@@ -21,8 +21,8 @@ images = torch.tensor(a).unsqueeze(0)[:, 200:256, 200:250]
 def stride_depth_and_inference(model, optimizer, criterion, images_real, patch_size_normal=25, patch_size_low=19, patch_size_out=9, patch_low_factor=3):
 
     batch_size, height, width, depth = images_real.shape
-    # --------- loop through the whole image volume
 
+    # --------- loop through the whole image volume
     patch_size_low_up = patch_size_low * patch_low_factor
 
     patch_half_normal = (patch_size_normal - 1) // 2
@@ -34,17 +34,18 @@ def stride_depth_and_inference(model, optimizer, criterion, images_real, patch_s
     depth_new = depth + patch_size_low_up
 
     # create a placeholder for the padded image
-    images_expanded = torch.zeros((batch_size, height_new, width_new, depth_new), dtype=torch.float32)
+    images_padded = torch.zeros((batch_size, height_new, width_new, depth_new), dtype=torch.float32)
 
     # copy the original image to the placeholder
-    images_expanded[:,
-    patch_half_low_up: height + patch_half_low_up,
-    patch_half_low_up: width + patch_half_low_up,
-    patch_half_low_up: depth + patch_half_low_up
+    images_padded[
+        :,
+        patch_half_low_up: height + patch_half_low_up,
+        patch_half_low_up: width + patch_half_low_up,
+        patch_half_low_up: depth + patch_half_low_up
     ] = copy.deepcopy(images_real)
 
     # placeholder to store the inferred/reconstructed image labels
-    images_reconstructed = torch.zeros_like(images_real)
+    labels_pred = torch.zeros_like(images_real)
 
     # indices of the original image
     h_start_orig = 0
@@ -104,7 +105,7 @@ def stride_depth_and_inference(model, optimizer, criterion, images_real, patch_s
                                  d_start_orig: d_end_orig]
 
                 # extract the current patch of the expanded image
-                patch_out = images_expanded[:, h_start_out: h_end_out, w_start_out: w_end_out,
+                patch_out = images_padded[:, h_start_out: h_end_out, w_start_out: w_end_out,
                             d_start_out: d_end_out]
 
                 # clip extra patrs
@@ -123,7 +124,7 @@ def stride_depth_and_inference(model, optimizer, criterion, images_real, patch_s
                         patch_original.shape[3] == 0):
                     break
 
-                images_reconstructed[
+                labels_pred[
                     :,
                     h_start_orig: h_end_orig,
                     w_start_orig: w_end_orig,
