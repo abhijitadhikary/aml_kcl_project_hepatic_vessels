@@ -37,50 +37,78 @@ batch_size = 1
 batch_size_inner = 16
 train_percentage = 0.8
 
-dataset_train = DatasetHepatic(
-    run_mode='train',
-    label_percentage=0.0001,
-    use_probabilistic=True,
-    patch_size_normal=patch_size_normal,
-    patch_size_low=patch_size_low,
-    patch_size_out=patch_size_out,
-    patch_low_factor=patch_low_factor,
-    create_numpy_dataset=False,
-    dataset_variant='npy',
-    batch_size_inner=batch_size_inner,
-    train_percentage=train_percentage
-)
+def get_dataloaders(
+        patch_size_normal,
+        patch_size_low,
+        patch_size_out,
+        patch_low_factor,
+        batch_size,
+        batch_size_inner,
+        train_percentage,
 
-dataset_val = DatasetHepatic(
-    run_mode='val',
-    label_percentage=0.0001,
-    use_probabilistic=True,
-    patch_size_normal=patch_size_normal,
-    patch_size_low=patch_size_low,
-    patch_size_out=patch_size_out,
-    patch_low_factor=patch_low_factor,
-    create_numpy_dataset=False,
-    dataset_variant='npy',
-    batch_size_inner=batch_size_inner,
-    train_percentage=train_percentage
-)
+):
+    dataset_train = DatasetHepatic(
+        run_mode='train',
+        label_percentage=0.0001,
+        use_probabilistic=True,
+        patch_size_normal=patch_size_normal,
+        patch_size_low=patch_size_low,
+        patch_size_out=patch_size_out,
+        patch_low_factor=patch_low_factor,
+        create_numpy_dataset=False,
+        dataset_variant='npy',
+        batch_size_inner=batch_size_inner,
+        train_percentage=train_percentage
+    )
 
-dataloader_train = DataLoader(
-    dataset_train,
-    batch_size=batch_size,
-    shuffle=True
-)
+    dataset_val = DatasetHepatic(
+        run_mode='val',
+        label_percentage=0.0001,
+        use_probabilistic=True,
+        patch_size_normal=patch_size_normal,
+        patch_size_low=patch_size_low,
+        patch_size_out=patch_size_out,
+        patch_low_factor=patch_low_factor,
+        create_numpy_dataset=False,
+        dataset_variant='npy',
+        batch_size_inner=batch_size_inner,
+        train_percentage=train_percentage
+    )
 
-dataloader_val = DataLoader(
-    dataset_train,
-    batch_size=batch_size,
-    shuffle=True
-)
+    dataset_inference = DatasetHepatic(
+        run_mode='inference',
+        label_percentage=0.0001,
+        use_probabilistic=True,
+        patch_size_normal=patch_size_normal,
+        patch_size_low=patch_size_low,
+        patch_size_out=patch_size_out,
+        patch_low_factor=patch_low_factor,
+        create_numpy_dataset=False,
+        dataset_variant='npy',
+        batch_size_inner=batch_size_inner,
+        train_percentage=train_percentage
+    )
 
+    dataloader_train = DataLoader(
+        dataset_train,
+        batch_size=batch_size,
+        shuffle=True
+    )
 
-# for i in range(20):
-#     batch = next(iter(dataloader))
-#     print(f'{i}\t{batch[0].shape}\t{batch[1].shape}\t{batch[2].shape}')
+    dataloader_val = DataLoader(
+        dataset_val,
+        batch_size=batch_size,
+        shuffle=True
+    )
+
+    dataloader_inference = DataLoader(
+        dataset_inference,
+        batch_size=batch_size,
+        shuffle=True
+    )
+
+    return dataloader_train, dataloader_val, dataloader_inference
+
 
 def early_stopper(loss_list_val, loss_least_val, early_stop_patience_counter, min_early_stop):
     '''
@@ -176,12 +204,9 @@ def run_epoch(dataloader, model, optimizer, criterion_dice, criterion_mse, crite
 
     return model, optimizer, loss_dice, loss_mse, loss_dice_n_mse
 
-
 def fit_model(
         model_name,
         optimizer_name,
-        dataloader_train,
-        dataloader_val,
         learning_rate,
         num_epochs,
         patience_lr_scheduler,
@@ -191,13 +216,33 @@ def fit_model(
         loss_mode,
         save_condition,
         resume_condition,
-        resume_epoch
-):
+        resume_epoch,
+        patch_size_normal=25,
+        patch_size_low=19,
+        patch_size_out=9,
+        patch_low_factor=3,
+        batch_size=1,
+        batch_size_inner=16,
+        train_percentage=0.8
+    ):
     '''
         Trains and validates a model given hyperparameters, model and optimizer name, dataloaders, num_epochs
     '''
 
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
+
+
+
+    # get the dataloaders
+    dataloader_train, dataloader_val, _ = get_dataloaders(
+        patch_size_normal,
+        patch_size_low,
+        patch_size_out,
+        patch_low_factor,
+        batch_size,
+        batch_size_inner,
+        train_percentage
+    )
 
     if model_name == 'deep_medic':
         model = DeepMedic().to(device)
@@ -379,8 +424,6 @@ def load_model(resume_epoch, model, optimizer):
 fit_model(
     model_name='deep_medic',
     optimizer_name='adam',  # adam, sgd_w_momentum
-    dataloader_train=dataloader_train,
-    dataloader_val=dataloader_val,
     learning_rate=0.001,
     num_epochs=10,
     patience_lr_scheduler=3,
@@ -390,7 +433,14 @@ fit_model(
     loss_mode='dice_only',  # dice_only, mse_only, dice_n_mse
     save_condition=True,
     resume_condition=False,
-    resume_epoch=1
+    resume_epoch=1,
+    patch_size_normal=25,
+    patch_size_low=19,
+    patch_size_out=9,
+    patch_low_factor=3,
+    batch_size=1,
+    batch_size_inner=16, # either batch_size or batch_size_inner MUST be set to 1
+    train_percentage=0.8
 )
 
 if run_mode == 'inference':

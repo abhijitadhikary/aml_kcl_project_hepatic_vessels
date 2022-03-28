@@ -77,7 +77,7 @@ class DatasetHepatic(Dataset):
             image = self.read_file_npy(self.filenames_image_npy[index])
             label = self.read_file_npy(self.filenames_label_npy[index])
 
-        if self.run_mode == 'train':
+        if self.run_mode in ['train', 'val']:
             '''
                 # normal = 25
                 # low = 19 (57)
