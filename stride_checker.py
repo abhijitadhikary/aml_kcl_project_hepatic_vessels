@@ -26,6 +26,7 @@ def stride_depth_and_inference(model, optimizer, criterion, images_real, patch_s
     patch_size_low_up = patch_size_low * patch_low_factor
 
     patch_half_normal = (patch_size_normal - 1) // 2
+    patch_half_low = (patch_size_low - 1) // 2
     patch_half_low_up = (patch_size_low_up - 1) // 2
     patch_half_out = (patch_size_out - 1) // 2
 
@@ -100,29 +101,28 @@ def stride_depth_and_inference(model, optimizer, criterion, images_real, patch_s
                 if d_end_out > depth_new:
                     break
 
-                # extract the current patch of the original image
-                patch_original = images_real[:, h_start_orig: h_end_orig, w_start_orig: w_end_orig,
-                                 d_start_orig: d_end_orig]
-
                 # extract the current patch of the expanded image
-                patch_out = images_padded[:, h_start_out: h_end_out, w_start_out: w_end_out,
-                            d_start_out: d_end_out]
 
-                # clip extra patrs
-                if patch_original.shape[1] < patch_size_out:
-                    patch_out = patch_out[:, :patch_original.shape[1], :, :]
+                image_patch_normal = images_padded[
+                            :,
+                            h_start_normal: h_end_normal,
+                            w_start_normal: w_end_normal,
+                            d_start_normal: d_end_normal
+                ]
 
-                if patch_original.shape[2] < patch_size_out:
-                    patch_out = patch_out[:, :, :patch_original.shape[2], :]
+                image_patch_low = images_padded[
+                            :,
+                            h_start_low: h_end_out,
+                            w_start_out: w_end_out,
+                            d_start_out: d_end_out
+                ]
 
-                if patch_original.shape[3] < patch_size_out:
-                    patch_out = patch_out[:, :, :, :patch_original.shape[3]]
-
-                # remove any dimensions with 0 elements
-                if (patch_out.shape[1] == 0) or (patch_out.shape[2] == 0) or (patch_out.shape[3] == 0) or (
-                        patch_original.shape[1] == 0) or (patch_original.shape[2] == 0) or (
-                        patch_original.shape[3] == 0):
-                    break
+                patch_out = images_padded[
+                            :,
+                            h_start_out: h_end_out,
+                            w_start_out: w_end_out,
+                            d_start_out: d_end_out
+                ]
 
                 labels_pred[
                     :,

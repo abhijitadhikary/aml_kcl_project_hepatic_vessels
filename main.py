@@ -14,6 +14,7 @@ import torchvision
 import torch.optim as optim
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
+import torch.nn.functional as F
 
 # from dataloader_top_left import DatasetHepatic
 from dataloader_center import DatasetHepatic
@@ -120,13 +121,13 @@ for index_epoch in tqdm(range(num_epochs), leave=False):
             images, labels = images.to(device), labels.to(device)
 
             labels_pred = stride_depth_and_inference(model=model,
-                                                              optimizer=optimizer,
-                                                              criterion=criterion_dice,
-                                                              images_real=images,
-                                                              patch_size_normal=25,
-                                                              patch_size_low=19,
-                                                              patch_size_out=9,
-                                                              patch_low_factor=3)
+                                                      optimizer=optimizer,
+                                                      criterion=criterion_dice,
+                                                      images_real=images,
+                                                      patch_size_normal=25,
+                                                      patch_size_low=19,
+                                                      patch_size_out=9,
+                                                      patch_low_factor=3)
 
             # calculate loss
 

@@ -16,8 +16,7 @@ import torch.optim as optim
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 import torchvision.transforms as transforms
-
-
+import torch.nn.functional as F
 
 class ToTorchTensor():
     '''
@@ -41,6 +40,8 @@ class DatasetHepatic(Dataset):
         self.patch_size_low = patch_size_low
         self.patch_size_out = patch_size_out
         self.patch_low_factor = patch_low_factor
+        self.patch_size_low_up = self.patch_size_low * self.patch_low_factor
+
         self.label_percentage = label_percentage
         self.use_probabilistic = use_probabilistic
         self.fetch_filenames()
@@ -58,18 +59,26 @@ class DatasetHepatic(Dataset):
                 # low = 19 (57)
                 # out = 9
             '''
+            # extract the three different patches of labels
+            label_patch_normal, label_patch_low_up, label_patch_out = self.get_random_patch(label)
 
-            label_patch_normal, label_patch_low, label_patch_out = self.get_random_patch(label)
+            # extract the three different patches of images
             image_patch_normal = self.get_3D_crop(image, self.coordinate_center, self.patch_size_normal)
-            image_patch_low = self.get_3D_crop(image, self.coordinate_center, self.patch_size_low)
+            image_patch_low_up = self.get_3D_crop(image, self.coordinate_center, self.patch_size_low_up)
             image_patch_out = self.get_3D_crop(image, self.coordinate_center, self.patch_size_out)
 
+
+            # apply transformation on images
             image_patch_normal = self.transform(image_patch_normal)
-            image_patch_low = self.transform(image_patch_low)
+            image_patch_low_up = self.transform(image_patch_low_up)
             image_patch_out = self.transform(image_patch_out)
 
+            # resize (downsample) the low resolution images and labels
+            image_patch_low = F.avg_pool3d(input=image_patch_low_up.unsqueeze(0), kernel_size=3, stride=None).squeeze(0)
+
+            # transform the labels to tensors
             label_patch_normal = torch.tensor(label_patch_normal, dtype=torch.int64, requires_grad=False)
-            label_patch_low = torch.tensor(label_patch_low, dtype=torch.int64, requires_grad=False)
+            label_patch_low_up = torch.tensor(label_patch_low_up, dtype=torch.int64, requires_grad=False)
             label_patch_out = torch.tensor(label_patch_out, dtype=torch.int64, requires_grad=False)
 
             return image_patch_normal.unsqueeze(0), image_patch_low.unsqueeze(0), label_patch_out.unsqueeze(0)
@@ -172,16 +181,16 @@ class DatasetHepatic(Dataset):
         # keep sampling a new patch until the current label meets the desired overall percentage
         while loop_condition:
             # get a valid coordinate and extract the patch
-            self.coordinate_center = self.get_rand_index_3D(height, width, depth, self.patch_size_low*self.patch_low_factor)
+            self.coordinate_center = self.get_rand_index_3D(height, width, depth, self.patch_size_low_up)
 
             patch_normal = self.get_3D_crop(input, self.coordinate_center, self.patch_size_normal)
-            patch_low = self.get_3D_crop(input, self.coordinate_center, self.patch_size_low)
+            patch_low_up = self.get_3D_crop(input, self.coordinate_center, self.patch_size_low_up)
             patch_out = self.get_3D_crop(input, self.coordinate_center, self.patch_size_out)
 
-            # print(f'{patch_normal.shape}\t{patch_low.shape}\t{patch_out.shape}')
+            # print(f'{patch_normal.shape}\t{patch_low_up.shape}\t{patch_out.shape}')
             # loop_condition = False
 
-            # if (patch_normal.shape == (25, 25, 25)) and (patch_low.shape == (19, 19, 19)) and (patch_out.shape == (9, 9, 9)):
+            # if (patch_normal.shape == (25, 25, 25)) and (patch_low_up.shape == (19, 19, 19)) and (patch_out.shape == (9, 9, 9)):
             #     loop_condition = False
 
             if self.use_probabilistic:
@@ -194,7 +203,7 @@ class DatasetHepatic(Dataset):
             else:
                 loop_condition = False
 
-        return patch_normal, patch_low, patch_out
+        return patch_normal, patch_low_up, patch_out
 
     def read_file_nib(self, filename):
         '''
