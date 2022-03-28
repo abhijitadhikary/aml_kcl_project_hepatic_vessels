@@ -7,6 +7,7 @@ import nibabel as nib
 from tqdm import tqdm
 import json
 import cv2
+import copy
 
 import torch
 import torchvision
@@ -22,8 +23,28 @@ from network_deepmedic import DeepMedic
 
 from losses import GeneralizedDiceLoss
 
-dataset = DatasetHepatic(run_mode='train', label_percentage=-1, use_probabilistic=True)
-dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
+from stride_checker import stride_depth_and_inference
+
+patch_size_normal = 25
+patch_size_low = 19
+patch_size_out = 9
+patch_low_factor = 3
+run_mode = 'inference'
+
+dataset = DatasetHepatic(
+    run_mode=run_mode,
+    label_percentage=-1,
+    use_probabilistic=True,
+    patch_size_normal=patch_size_normal,
+    patch_size_low=patch_size_low,
+    patch_size_out=patch_size_out,
+    patch_low_factor=patch_low_factor
+)
+dataloader = DataLoader(
+    dataset,
+    batch_size=1,
+    shuffle=False
+)
 
 # for i in range(20):
 #     batch = next(iter(dataloader))
@@ -35,14 +56,22 @@ learning_rate = 0.0001
 momentum = 0.9
 device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
 model = DeepMedic().to(device)
+
 # optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=momentum)
-optimizer = optim.Adam(model.parameters(), lr=learning_rate, betas=(0.9, 0.999), amsgrad=True)
+
+optimizer = optim.Adam(
+    model.parameters(),
+    lr=learning_rate,
+    betas=(0.9, 0.999),
+    amsgrad=True
+)
+
 criterion_mse = nn.MSELoss()
 # criterion_mse = get_mse_loss
 criterion_dice = GeneralizedDiceLoss().dice
 criterion_ce = nn.CrossEntropyLoss()
 num_epochs = 10
-run_mode = 'train'
+
 
 for index_epoch in tqdm(range(num_epochs), leave=False):
     time_start = time.time()
@@ -83,11 +112,33 @@ for index_epoch in tqdm(range(num_epochs), leave=False):
             # ----------------------------------------------------------------------------------------------------------
             # ----------------------------------------------------------------------------------------------------------
 
-        else:
+        elif run_mode == 'inference':
             # ----------------------------------------------------------------------------------------------------------
             # ----------------------------------------------------------------------------------------------------------
             # ----------------------------------------------------------------------------------------------------------
-            pass
+            images, labels = batch
+            images, labels = images.to(device), labels.to(device)
+
+            labels_reconstructed = stride_depth_and_inference(model=model,
+                                                              optimizer=optimizer,
+                                                              criterion=criterion_dice,
+                                                              images_real=images,
+                                                              patch_size_normal=25,
+                                                              patch_size_low=19,
+                                                              patch_size_out=9,
+                                                              patch_low_factor=3)
+
+            # images_expanded[:, paddint_amount:paddint_amount + height, paddint_amount:paddint_amount + width,paddint_amount:paddint_amount + depth]
+
+            # expand
+
+
+            # extract the three patches
+
+            # forward pass
+
+            # calculate loss
+
 
     loss_mse_epoch = sum(loss_list_mse) / len(loss_list_mse)
 

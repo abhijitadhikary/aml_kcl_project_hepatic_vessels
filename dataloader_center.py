@@ -48,14 +48,16 @@ class DatasetHepatic(Dataset):
         self.transform = transform if not transform is None else transforms.Compose([ToTorchTensor()])
 
     def __getitem__(self, index):
-        if self.run_mode in ['train', 'val']:
+
+        image = self.read_file_nib(self.filenames_image[index])
+        label = self.read_file_nib(self.filenames_label[index])
+
+        if self.run_mode == 'train':
             '''
                 # normal = 25
-                # low = 19
+                # low = 19 (57)
                 # out = 9
             '''
-            image = self.read_file_nib(self.filenames_image[index])
-            label = self.read_file_nib(self.filenames_label[index])
 
             label_patch_normal, label_patch_low, label_patch_out = self.get_random_patch(label)
             image_patch_normal = self.get_3D_crop(image, self.coordinate_center, self.patch_size_normal)
@@ -70,9 +72,14 @@ class DatasetHepatic(Dataset):
             label_patch_low = torch.tensor(label_patch_low, dtype=torch.int64, requires_grad=False)
             label_patch_out = torch.tensor(label_patch_out, dtype=torch.int64, requires_grad=False)
 
+            return image_patch_normal.unsqueeze(0), image_patch_low.unsqueeze(0), label_patch_out.unsqueeze(0)
+
+        elif self.run_mode == 'inference':
+
+            return image, label
 
 
-        return image_patch_normal.unsqueeze(0), image_patch_low.unsqueeze(0), label_patch_out.unsqueeze(0)
+
 
 
     def __len__(self):
@@ -211,7 +218,7 @@ class DatasetHepatic(Dataset):
         except FileNotFoundError:
             print(f'Meta file: {self.path_meta} not found')
 
-        if self.run_mode == 'train':
+        if self.run_mode in ['train', 'inference']:
             self.filenames_image = [current_sample['image'] for current_sample in data_meta['training']]
             self.filenames_label = [current_sample['label'] for current_sample in data_meta['training']]
 
@@ -223,6 +230,7 @@ class DatasetHepatic(Dataset):
                 raise Exception(f'Error reading {self.run_mode} labels')
 
         elif self.run_mode == 'test':
+            # 'TODO' correct the train and test and inference variants
             self.filenames_image = [current_sample for current_sample in data_meta['test']]
             if len(self.filenames_image) == 0:
                 raise Exception(f'Error reading {self.run_mode} images')
