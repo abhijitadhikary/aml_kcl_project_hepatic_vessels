@@ -35,14 +35,10 @@ patch_low_factor = 3
 # either batch_size or batch_size_inner MUST be set to 1
 batch_size = 1
 batch_size_inner = 16
-run_mode = 'train'
+train_percentage = 0.8
 
-# run inference with batch size = 1
-if run_mode == 'inference':
-    batch_size = 1
-
-dataset = DatasetHepatic(
-    run_mode=run_mode,
+dataset_train = DatasetHepatic(
+    run_mode='train',
     label_percentage=0.0001,
     use_probabilistic=True,
     patch_size_normal=patch_size_normal,
@@ -51,14 +47,36 @@ dataset = DatasetHepatic(
     patch_low_factor=patch_low_factor,
     create_numpy_dataset=False,
     dataset_variant='npy',
-    batch_size_inner=batch_size_inner
+    batch_size_inner=batch_size_inner,
+    train_percentage=train_percentage
 )
 
-dataloader = DataLoader(
-    dataset,
-    batch_size=batch_size,
-    shuffle=False
+dataset_val = DatasetHepatic(
+    run_mode='val',
+    label_percentage=0.0001,
+    use_probabilistic=True,
+    patch_size_normal=patch_size_normal,
+    patch_size_low=patch_size_low,
+    patch_size_out=patch_size_out,
+    patch_low_factor=patch_low_factor,
+    create_numpy_dataset=False,
+    dataset_variant='npy',
+    batch_size_inner=batch_size_inner,
+    train_percentage=train_percentage
 )
+
+dataloader_train = DataLoader(
+    dataset_train,
+    batch_size=batch_size,
+    shuffle=True
+)
+
+dataloader_val = DataLoader(
+    dataset_train,
+    batch_size=batch_size,
+    shuffle=True
+)
+
 
 # for i in range(20):
 #     batch = next(iter(dataloader))
@@ -88,6 +106,7 @@ def early_stopper(loss_list_val, loss_least_val, early_stop_patience_counter, mi
 
     return loss_least_val, early_stop_patience_counter
 
+
 def run_epoch(dataloader, model, optimizer, criterion_dice, criterion_mse, criterion_ce, device, run_mode, loss_mode):
     '''
         Runs one epoch of training and validation loops
@@ -105,9 +124,11 @@ def run_epoch(dataloader, model, optimizer, criterion_dice, criterion_mse, crite
             run_mode.eval()
 
         image_patch_normal, image_patch_low, label_patch_out_real = batch
-        image_patch_normal, image_patch_low, label_patch_out_real = image_patch_normal.to(device), image_patch_low.to(device), label_patch_out_real.to(device)
+        image_patch_normal, image_patch_low, label_patch_out_real = image_patch_normal.to(device), image_patch_low.to(
+            device), label_patch_out_real.to(device)
         if batch_size_inner > 1:
-            image_patch_normal, image_patch_low, label_patch_out_real = image_patch_normal.squeeze(0), image_patch_low.squeeze(0), label_patch_out_real.squeeze(0)
+            image_patch_normal, image_patch_low, label_patch_out_real = image_patch_normal.squeeze(
+                0), image_patch_low.squeeze(0), label_patch_out_real.squeeze(0)
 
         # forward pass
         label_patch_out_pred = model.forward((image_patch_normal, image_patch_low))
@@ -154,6 +175,7 @@ def run_epoch(dataloader, model, optimizer, criterion_dice, criterion_mse, crite
     loss_dice_n_mse = 0
 
     return model, optimizer, loss_dice, loss_mse, loss_dice_n_mse
+
 
 def fit_model(
         model_name,
@@ -202,7 +224,8 @@ def fit_model(
         )
 
     # learning rate scheduler
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=patience_lr_scheduler, factor=factor_lr_scheduler, verbose=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=patience_lr_scheduler,
+                                                           factor=factor_lr_scheduler, verbose=True)
 
     early_stop_patience_counter = 0
     loss_best_dice = 1e12
@@ -282,18 +305,21 @@ def fit_model(
             loss_least_val = loss_best_mse
             loss_list_val = loss_list_mse_val
         elif loss_mode == 'dice_n_mse':
-            loss_best_dice_n_mse = save_model(args, save_condition, index_epoch, loss=loss_dice_n_mse, loss_best=loss_best_dice_n_mse)
+            loss_best_dice_n_mse = save_model(args, save_condition, index_epoch, loss=loss_dice_n_mse,
+                                              loss_best=loss_best_dice_n_mse)
             loss_least_val = loss_best_dice_n_mse
             loss_list_val = loss_list_dice_n_mse_val
 
         # check early stopping conditions
         if index_epoch > min_early_stop:
-            loss_least_val, early_stop_patience_counter = early_stopper(loss_list_val, loss_least_val, early_stop_patience_counter, min_early_stop)
+            loss_least_val, early_stop_patience_counter = early_stopper(loss_list_val, loss_least_val,
+                                                                        early_stop_patience_counter, min_early_stop)
 
             # if early stopping condition meets, break training
             if early_stop_patience_counter > patience_early_stop:
                 print(f'Early stopping')
                 break
+
 
 def save_model(args, save_condition, index_epoch, loss, loss_best):
     '''
@@ -310,7 +336,7 @@ def save_model(args, save_condition, index_epoch, loss, loss_best):
                  'args': args
                  }
 
-    save_path = os.path.join(checkpoint_path, f'{index_epoch+1}.pth')
+    save_path = os.path.join(checkpoint_path, f'{index_epoch + 1}.pth')
     torch.save(save_dict, save_path)
     save_path = os.path.join(checkpoint_path, f'latest.pth')
     torch.save(save_dict, save_path)
@@ -325,8 +351,9 @@ def save_model(args, save_condition, index_epoch, loss, loss_best):
 
         save_path = os.path.join(checkpoint_path, f'best.pth')
         torch.save(save_dict, save_path)
-        print(f'*********************** New best model saved at {args.index_epoch+1} ***********************')
+        print(f'*********************** New best model saved at {args.index_epoch + 1} ***********************')
     return loss_best
+
 
 def load_model(resume_epoch, model, optimizer):
     '''
@@ -344,28 +371,27 @@ def load_model(resume_epoch, model, optimizer):
     optimizer.load_state_dict(checkpoint['optim_state_dict'])
     args = checkpoint['args']
 
-    print(f'Model successfully loaded from epoch {index_epoch+1}')
+    print(f'Model successfully loaded from epoch {index_epoch + 1}')
 
     return args, model, optimizer
 
 
 fit_model(
     model_name='deep_medic',
-    optimizer_name='adam', # adam, sgd_w_momentum
-    dataloader_train=dataloader,
-    dataloader_val=dataloader,
+    optimizer_name='adam',  # adam, sgd_w_momentum
+    dataloader_train=dataloader_train,
+    dataloader_val=dataloader_val,
     learning_rate=0.001,
     num_epochs=10,
     patience_lr_scheduler=3,
     factor_lr_scheduler=0.1,
     patience_early_stop=5,
     min_early_stop=10,
-    loss_mode='dice_only', # dice_only, mse_only, dice_n_mse
+    loss_mode='dice_only',  # dice_only, mse_only, dice_n_mse
     save_condition=True,
     resume_condition=False,
     resume_epoch=1
 )
-
 
 if run_mode == 'inference':
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
@@ -385,6 +411,3 @@ if run_mode == 'inference':
             patch_size_out=patch_size_out,
             patch_low_factor=patch_low_factor
         )
-
-
-

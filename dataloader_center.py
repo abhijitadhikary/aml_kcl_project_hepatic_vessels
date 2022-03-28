@@ -46,7 +46,9 @@ class DatasetHepatic(Dataset):
                  batch_size_inner=100,
                  use_probabilistic=False,
                  create_numpy_dataset=False,
-                 dataset_variant='nib'):
+                 dataset_variant='nib',
+                 train_percentage=0.8
+                 ):
 
         self.run_mode = run_mode
         self.create_numpy_dataset_cond = create_numpy_dataset
@@ -56,6 +58,7 @@ class DatasetHepatic(Dataset):
         self.patch_size_out = patch_size_out
         self.patch_low_factor = patch_low_factor
         self.batch_size_inner = batch_size_inner
+        self.train_percentage = train_percentage
         self.patch_size_low_up = self.patch_size_low * self.patch_low_factor
 
         self.label_percentage = label_percentage
@@ -357,21 +360,27 @@ class DatasetHepatic(Dataset):
         except FileNotFoundError:
             print(f'Meta file: {self.path_meta} not found')
 
-        if self.run_mode in ['train', 'inference']:
-            self.filenames_image_nib = [current_sample['image'] for current_sample in data_meta['training']]
-            self.filenames_label_nib = [current_sample['label'] for current_sample in data_meta['training']]
+        num_samples = len(data_meta['training'])
 
-            self.filenames_image_npy = [os.path.join('ImagesTrNP', f'{filename[11:-7]}.npy') for filename in
-                                        self.filenames_image_nib]
-            self.filenames_label_npy = [os.path.join('labelsTrNP', f'{filename[11:-7]}.npy') for filename in
-                                        self.filenames_label_nib]
+        if self.run_mode == 'train':
+            num_samples = int(np.floor(self.train_percentage * num_samples))
+        else:
+            num_samples = int(np.ceil((1-self.train_percentage) * num_samples))
 
-            if (not len(self.filenames_image_nib) == len(self.filenames_label_nib)):
-                raise Exception('Inconsistent training image/label combination')
-            if len(self.filenames_image_nib) == 0:
-                raise Exception(f'Error reading {self.run_mode} images')
-            if len(self.filenames_label_nib) == 0:
-                raise Exception(f'Error reading {self.run_mode} labels')
+        self.filenames_image_nib = [current_sample['image'] for current_sample in data_meta['training']][:num_samples]
+        self.filenames_label_nib = [current_sample['label'] for current_sample in data_meta['training']][:num_samples]
+
+        self.filenames_image_npy = [os.path.join('ImagesTrNP', f'{filename[11:-7]}.npy') for filename in
+                                    self.filenames_image_nib][:num_samples]
+        self.filenames_label_npy = [os.path.join('labelsTrNP', f'{filename[11:-7]}.npy') for filename in
+                                    self.filenames_label_nib][:num_samples]
+
+        if (not len(self.filenames_image_nib) == len(self.filenames_label_nib)):
+            raise Exception('Inconsistent training image/label combination')
+        if len(self.filenames_image_nib) == 0:
+            raise Exception(f'Error reading {self.run_mode} images')
+        if len(self.filenames_label_nib) == 0:
+            raise Exception(f'Error reading {self.run_mode} labels')
 
         elif self.run_mode == 'test':
             # 'TODO' correct the train and test and inference variants
@@ -380,3 +389,5 @@ class DatasetHepatic(Dataset):
                 raise Exception(f'Error reading {self.run_mode} images')
 
         self.num_samples = len(self.filenames_image_nib)
+
+
