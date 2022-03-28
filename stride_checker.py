@@ -6,25 +6,36 @@ import nibabel as nib
 from tqdm import tqdm
 import torch.nn.functional as F
 
-path_meta = 'dataset.json'
+# path_meta = 'dataset.json'
+#
+# file_meta = open(path_meta)
+# data_meta = json.loads(file_meta.read())
+# file_meta.close()
+#
+#
+# # images = torch.tensor(a).unsqueeze(0)
+# a = nib.load(data_meta['training'][0]['label']).get_fdata()
+#
+# # images = torch.tensor(a).unsqueeze(0)
+# images = torch.tensor(a).unsqueeze(0)[:, 200:256, 200:250]
 
-file_meta = open(path_meta)
-data_meta = json.loads(file_meta.read())
-file_meta.close()
-
-
-# images = torch.tensor(a).unsqueeze(0)
-a = nib.load(data_meta['training'][0]['label']).get_fdata()
-
-# images = torch.tensor(a).unsqueeze(0)
-images = torch.tensor(a).unsqueeze(0)[:, 200:256, 200:250]
-
-def stride_depth_and_inference(model, optimizer, criterion_dice, images_real, labels_real, patch_size_normal=25, patch_size_low=19, patch_size_out=9, patch_low_factor=3):
+def stride_depth_and_inference(
+        model,
+        criterion_dice,
+        criterion_mse,
+        images_real,
+        labels_real,
+        patch_size_normal=25,
+        patch_size_low=19,
+        patch_size_out=9,
+        patch_low_factor=3
+):
 
     model.eval()
 
     with torch.no_grad():
-        loss_list = []
+        loss_list_dice = []
+        loss_list_mse = []
 
         device = images_real.device
         batch_size, height, width, depth = images_real.shape
@@ -172,10 +183,12 @@ def stride_depth_and_inference(model, optimizer, criterion_dice, images_real, la
                     label_patch_out_real_one_hot[:, 1] = torch.where(label_patch_out_real == 1, 1, 0)
                     label_patch_out_real_one_hot[:, 2] = torch.where(label_patch_out_real == 2, 1, 0)
 
-                    # cross-entropy loss
-                    loss = criterion_dice(label_patch_out_pred.float(), label_patch_out_real_one_hot)
-                    loss_list.append(loss)
-                    # print(loss)
+                    # cross-entropy loss_dice
+                    loss_dice = criterion_dice(label_patch_out_pred.float(), label_patch_out_real_one_hot)
+                    loss_mse = criterion_mse(label_patch_out_pred.float(), label_patch_out_real_one_hot.float())
+                    loss_list_dice.append(loss_dice)
+                    loss_list_mse.append(loss_mse)
+                    # print(loss_dice)
 
                     label_patch_out_pred_double = torch.argmax(label_patch_out_pred.detach(), dim=1)
                     label_patch_out_pred_double_temp = torch.zeros(batch_size, patch_size_out, patch_size_out, patch_size_out).to(device)
@@ -194,5 +207,7 @@ def stride_depth_and_inference(model, optimizer, criterion_dice, images_real, la
             h_start_orig = h_start_orig + patch_size_out
             h_end_orig = h_end_orig + patch_size_out
 
-            loss = sum(loss_list) / len(loss_list)
-    return labels_pred_whole_image, model, optimizer, criterion_dice, loss
+            loss_dice = sum(loss_list_dice) / len(loss_list_dice)
+            loss_mse = sum(loss_list_mse) / len(loss_list_mse)
+
+    return labels_pred_whole_image, model, criterion_dice, loss_dice, loss_mse

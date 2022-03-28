@@ -231,8 +231,6 @@ def fit_model(
 
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
 
-
-
     # get the dataloaders
     dataloader_train, dataloader_val, _ = get_dataloaders(
         patch_size_normal,
@@ -342,15 +340,15 @@ def fit_model(
                loss_list_dice_n_mse_val, loss_list_dice_train, loss_list_mse_train, loss_list_dice_n_mse_train, \
                loss_mode, num_epochs, model_name, optimizer_name
         if loss_mode == 'dice_only':
-            loss_best_dice = save_model(args, save_condition, index_epoch, loss=loss_dice, loss_best=loss_best_dice)
+            loss_best_dice = save_model(args, save_condition, model, optimizer, index_epoch, loss=loss_dice, loss_best=loss_best_dice)
             loss_least_val = loss_best_dice
             loss_list_val = loss_list_dice_val
         elif loss_mode == 'mse_only':
-            loss_best_mse = save_model(args, save_condition, index_epoch, loss=loss_mse, loss_best=loss_best_mse)
+            loss_best_mse = save_model(args, save_condition, model, optimizer, index_epoch, loss=loss_mse, loss_best=loss_best_mse)
             loss_least_val = loss_best_mse
             loss_list_val = loss_list_mse_val
         elif loss_mode == 'dice_n_mse':
-            loss_best_dice_n_mse = save_model(args, save_condition, index_epoch, loss=loss_dice_n_mse,
+            loss_best_dice_n_mse = save_model(args, save_condition, model, optimizer, index_epoch, loss=loss_dice_n_mse,
                                               loss_best=loss_best_dice_n_mse)
             loss_least_val = loss_best_dice_n_mse
             loss_list_val = loss_list_dice_n_mse_val
@@ -366,7 +364,7 @@ def fit_model(
                 break
 
 
-def save_model(args, save_condition, index_epoch, loss, loss_best):
+def save_model(args, save_condition, model, optimizer, index_epoch, loss, loss_best):
     '''
         Saves the model, best and the latest
     '''
@@ -421,39 +419,52 @@ def load_model(resume_epoch, model, optimizer):
     return args, model, optimizer
 
 
-fit_model(
-    model_name='deep_medic',
-    optimizer_name='adam',  # adam, sgd_w_momentum
-    learning_rate=0.001,
-    num_epochs=10,
-    patience_lr_scheduler=3,
-    factor_lr_scheduler=0.1,
-    patience_early_stop=5,
-    min_early_stop=10,
-    loss_mode='dice_only',  # dice_only, mse_only, dice_n_mse
-    save_condition=True,
-    resume_condition=False,
-    resume_epoch=1,
-    patch_size_normal=25,
-    patch_size_low=19,
-    patch_size_out=9,
-    patch_low_factor=3,
-    batch_size=1,
-    batch_size_inner=16, # either batch_size or batch_size_inner MUST be set to 1
-    train_percentage=0.8
-)
+def run_inference(
+        model_name,
+        loss_mode,
+        patch_size_normal=25,
+        patch_size_low=19,
+        patch_size_out=9,
+        patch_low_factor=3,
+        batch_size=1,
+        batch_size_inner=16,  # either batch_size or batch_size_inner MUST be set to 1
+        train_percentage=0.8,
+        load_model=False,
+        load_epoch='best'
 
-if run_mode == 'inference':
+    ):
+    '''
+        Run 3D inference on the validation set. Generates a 3D volume of predicted labels with same shape as the original one
+    '''
+
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
+
+    _, _, dataloader_inference = get_dataloaders(
+        patch_size_normal,
+        patch_size_low,
+        patch_size_out,
+        patch_low_factor,
+        batch_size,
+        batch_size_inner,
+        train_percentage
+    )
+
+    if model_name == 'deep_medic':
+        model = DeepMedic().to(device)
+
+    # loss funcitons
+    criterion_mse = nn.MSELoss()
+    criterion_dice = GeneralizedDiceLoss().dice
+    criterion_ce = nn.CrossEntropyLoss()
 
     for index_batch, batch in enumerate(dataloader_inference):
         images, labels = batch
         images, labels = images.to(device), labels.to(device)
 
-        labels_pred, model, optimizer, criterion_dice, loss = stride_depth_and_inference(
+        labels_pred, model, criterion_dice, loss_dice, loss_mse = stride_depth_and_inference(
             model=model,
-            optimizer=optimizer,
             criterion_dice=criterion_dice,
+            criterion_mse=criterion_mse,
             images_real=images,
             labels_real=labels,
             patch_size_normal=patch_size_normal,
@@ -461,3 +472,43 @@ if run_mode == 'inference':
             patch_size_out=patch_size_out,
             patch_low_factor=patch_low_factor
         )
+
+        print(f'{index_batch}\tLoss DICE:\t{loss_dice}\tLoss MSE:\t{loss_mse}')
+
+# fit_model(
+#     model_name='deep_medic',
+#     optimizer_name='adam',  # adam, sgd_w_momentum
+#     learning_rate=0.001,
+#     num_epochs=10,
+#     patience_lr_scheduler=3,
+#     factor_lr_scheduler=0.1,
+#     patience_early_stop=5,
+#     min_early_stop=10,
+#     loss_mode='dice_only',  # dice_only, mse_only, dice_n_mse
+#     save_condition=True,
+#     resume_condition=False,
+#     resume_epoch=1,
+#     patch_size_normal=25,
+#     patch_size_low=19,
+#     patch_size_out=9,
+#     patch_low_factor=3,
+#     batch_size=1,
+#     batch_size_inner=16, # either batch_size or batch_size_inner MUST be set to 1
+#     train_percentage=0.8
+# )
+
+run_inference(
+        model_name='deep_medic',
+        loss_mode='dice_only',
+        patch_size_normal=25,
+        patch_size_low=19,
+        patch_size_out=9,
+        patch_low_factor=3,
+        batch_size=1,
+        batch_size_inner=16,  # either batch_size or batch_size_inner MUST be set to 1
+        train_percentage=0.8,
+        load_model=False,
+        load_epoch='best'
+)
+
+
