@@ -8,6 +8,7 @@ from tqdm import tqdm
 import json
 import cv2
 import copy
+import torch.nn.functional as F
 
 import torch
 import torchvision
@@ -96,9 +97,13 @@ for index_epoch in tqdm(range(num_epochs), leave=False):
 
             # convert label_patch_out_real to one hot
             label_patch_out_real_one_hot = torch.zeros_like(label_patch_out_pred).to(device)
-            label_patch_out_real_one_hot[:, 0] = torch.where(label_patch_out_real == 0, 0, 1)
-            label_patch_out_real_one_hot[:, 1] = torch.where(label_patch_out_real == 1, 1, 1)
-            label_patch_out_real_one_hot[:, 2] = torch.where(label_patch_out_real == 2, 2, 1)
+            # label_patch_out_real_one_hot[:, 0] = torch.where(label_patch_out_real == 0, 0, 1)
+            # label_patch_out_real_one_hot[:, 1] = torch.where(label_patch_out_real == 1, 1, 1)
+            # label_patch_out_real_one_hot[:, 2] = torch.where(label_patch_out_real == 2, 2, 1)
+            label_patch_out_real_one_hot[:, 0] = torch.where(label_patch_out_real == 0, 1, 0)
+            label_patch_out_real_one_hot[:, 1] = torch.where(label_patch_out_real == 1, 1, 0)
+            label_patch_out_real_one_hot[:, 2] = torch.where(label_patch_out_real == 2, 1, 0)
+
 
             # generalized dice loss
             loss = criterion_dice(label_patch_out_pred.float(), label_patch_out_real_one_hot)
@@ -120,14 +125,17 @@ for index_epoch in tqdm(range(num_epochs), leave=False):
             images, labels = batch
             images, labels = images.to(device), labels.to(device)
 
-            labels_pred = stride_depth_and_inference(model=model,
-                                                      optimizer=optimizer,
-                                                      criterion=criterion_dice,
-                                                      images_real=images,
-                                                      patch_size_normal=25,
-                                                      patch_size_low=19,
-                                                      patch_size_out=9,
-                                                      patch_low_factor=3)
+            labels_pred, model, optimizer, criterion_dice, loss = stride_depth_and_inference(model=model,
+                                                                                              optimizer=optimizer,
+                                                                                              criterion_dice=criterion_dice,
+                                                                                              images_real=images,
+                                                                                              labels_real=labels,
+                                                                                              patch_size_normal=25,
+                                                                                              patch_size_low=19,
+                                                                                              patch_size_out=9,
+                                                                                              patch_low_factor=3)
+
+
 
             # calculate loss
 
