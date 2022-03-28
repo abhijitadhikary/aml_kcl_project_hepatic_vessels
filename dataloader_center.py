@@ -89,28 +89,62 @@ class DatasetHepatic(Dataset):
             # label_temp[:label.shape[0], :label.shape[1], :label.shape[2]] = label
             # label = label_temp
 
-            # extract the three different patches of labels
-            label_patch_normal, label_patch_low_up, label_patch_out = self.get_random_patch(label)
+            if self.batch_size_inner > 1:
+                image_patch_normal_stack = torch.zeros((self.batch_size_inner, self.patch_size_normal, self.patch_size_normal, self.patch_size_normal), dtype=torch.float32)
+                image_patch_low_stack = torch.zeros((self.batch_size_inner, self.patch_size_low, self.patch_size_low, self.patch_size_low), dtype=torch.float32)
+                label_patch_out_stack = torch.zeros((self.batch_size_inner, self.patch_size_out, self.patch_size_out, self.patch_size_out), dtype=torch.int64)
 
-            # extract the three different patches of images
-            image_patch_normal = self.get_3D_crop(image, self.coordinate_center, self.patch_size_normal)
-            image_patch_low_up = self.get_3D_crop(image, self.coordinate_center, self.patch_size_low_up)
-            image_patch_out = self.get_3D_crop(image, self.coordinate_center, self.patch_size_out)
+                for index_inner in range(self.batch_size_inner):
+                    # extract the three different patches of labels
+                    label_patch_normal, label_patch_low_up, label_patch_out = self.get_random_patch(label)
 
-            # apply transformation on images
-            image_patch_normal = self.transform(image_patch_normal)
-            image_patch_low_up = self.transform(image_patch_low_up)
-            image_patch_out = self.transform(image_patch_out)
+                    # extract the three different patches of images
+                    image_patch_normal = self.get_3D_crop(image, self.coordinate_center, self.patch_size_normal)
+                    image_patch_low_up = self.get_3D_crop(image, self.coordinate_center, self.patch_size_low_up)
+                    image_patch_out = self.get_3D_crop(image, self.coordinate_center, self.patch_size_out)
 
-            # resize (downsample) the low resolution images and labels
-            image_patch_low = F.avg_pool3d(input=image_patch_low_up.unsqueeze(0), kernel_size=3, stride=None).squeeze(0)
+                    # apply transformation on images
+                    image_patch_normal = self.transform(image_patch_normal)
+                    image_patch_low_up = self.transform(image_patch_low_up)
+                    # image_patch_out = self.transform(image_patch_out)
 
-            # transform the labels to tensors
-            label_patch_normal = torch.tensor(label_patch_normal, dtype=torch.int64, requires_grad=False)
-            label_patch_low_up = torch.tensor(label_patch_low_up, dtype=torch.int64, requires_grad=False)
-            label_patch_out = torch.tensor(label_patch_out, dtype=torch.int64, requires_grad=False)
+                    # resize (downsample) the low resolution images and labels
+                    image_patch_low = F.avg_pool3d(input=image_patch_low_up.unsqueeze(0), kernel_size=3, stride=None).squeeze(0)
 
-            return image_patch_normal.unsqueeze(0), image_patch_low.unsqueeze(0), label_patch_out.unsqueeze(0)
+                    # transform the labels to tensors
+                    # label_patch_normal = torch.tensor(label_patch_normal, dtype=torch.int64, requires_grad=False)
+                    # label_patch_low_up = torch.tensor(label_patch_low_up, dtype=torch.int64, requires_grad=False)
+                    label_patch_out = torch.tensor(label_patch_out, dtype=torch.int64, requires_grad=False)
+
+                    image_patch_normal_stack[index_inner] = image_patch_normal.unsqueeze(0)
+                    image_patch_low_stack[index_inner] = image_patch_low.unsqueeze(0)
+                    label_patch_out_stack[index_inner] = label_patch_out.unsqueeze(0)
+
+                return image_patch_normal_stack.unsqueeze(1), image_patch_low_stack.unsqueeze(1), label_patch_out_stack.unsqueeze(1)
+            else:
+                # extract the three different patches of labels
+                label_patch_normal, label_patch_low_up, label_patch_out = self.get_random_patch(label)
+
+                # extract the three different patches of images
+                image_patch_normal = self.get_3D_crop(image, self.coordinate_center, self.patch_size_normal)
+                image_patch_low_up = self.get_3D_crop(image, self.coordinate_center, self.patch_size_low_up)
+                image_patch_out = self.get_3D_crop(image, self.coordinate_center, self.patch_size_out)
+
+                # apply transformation on images
+                image_patch_normal = self.transform(image_patch_normal)
+                image_patch_low_up = self.transform(image_patch_low_up)
+                # image_patch_out = self.transform(image_patch_out)
+
+                # resize (downsample) the low resolution images and labels
+                image_patch_low = F.avg_pool3d(input=image_patch_low_up.unsqueeze(0), kernel_size=3,
+                                               stride=None).squeeze(0)
+
+                # transform the labels to tensors
+                # label_patch_normal = torch.tensor(label_patch_normal, dtype=torch.int64, requires_grad=False)
+                # label_patch_low_up = torch.tensor(label_patch_low_up, dtype=torch.int64, requires_grad=False)
+                label_patch_out = torch.tensor(label_patch_out, dtype=torch.int64, requires_grad=False)
+
+                return image_patch_normal.unsqueeze(0), image_patch_low.unsqueeze(0), label_patch_out.unsqueeze(0)
 
         elif self.run_mode == 'inference':
             # TODO fix uneven dimensions, otherwise run with batch size = 1

@@ -27,15 +27,14 @@ from losses import GeneralizedDiceLoss
 
 from stride_checker import stride_depth_and_inference
 
-
-
 patch_size_normal = 25
 patch_size_low = 19
 patch_size_out = 9
 patch_low_factor = 3
 
+# either batch_size or batch_size_inner MUST be set to 1
 batch_size = 1
-batch_size_inner = 100
+batch_size_inner = 16
 run_mode = 'train'
 
 # run inference with batch size = 1
@@ -65,7 +64,6 @@ dataloader = DataLoader(
 #     print(f'{i}\t{batch[0].shape}\t{batch[1].shape}\t{batch[2].shape}')
 
 
-
 learning_rate = 0.0001
 momentum = 0.9
 device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
@@ -86,7 +84,6 @@ criterion_dice = GeneralizedDiceLoss().dice
 criterion_ce = nn.CrossEntropyLoss()
 num_epochs = 10
 
-
 for index_epoch in tqdm(range(num_epochs), leave=False):
     time_start = time.time()
     loss_list_mse = []
@@ -98,14 +95,16 @@ for index_epoch in tqdm(range(num_epochs), leave=False):
             model.train()
             optimizer.zero_grad()
             image_patch_normal, image_patch_low, label_patch_out_real = batch
-            image_patch_normal, image_patch_low, label_patch_out_real = image_patch_normal.to(device), image_patch_low.to(device), label_patch_out_real.to(device)
-
+            image_patch_normal, image_patch_low, label_patch_out_real = image_patch_normal.to(
+                device), image_patch_low.to(device), label_patch_out_real.to(device)
+            if batch_size_inner > 1:
+                image_patch_normal, image_patch_low, label_patch_out_real = image_patch_normal.squeeze(
+                    0), image_patch_low.squeeze(0), label_patch_out_real.squeeze(0)
             # forward pass
             label_patch_out_pred = model.forward((image_patch_normal, image_patch_low))
 
             # cross-entropy loss
-            loss = criterion_ce(label_patch_out_pred.float(), label_patch_out_real.squeeze(1))
-
+            # loss = criterion_ce(label_patch_out_pred.float(), label_patch_out_real.squeeze(1).long())
 
             # convert label_patch_out_real to one hot
             label_patch_out_real_one_hot = torch.zeros_like(label_patch_out_pred).to(device)
@@ -116,7 +115,6 @@ for index_epoch in tqdm(range(num_epochs), leave=False):
             label_patch_out_real_one_hot[:, 0] = torch.where(label_patch_out_real == 0, 1, 0).squeeze(1)
             label_patch_out_real_one_hot[:, 1] = torch.where(label_patch_out_real == 1, 1, 0).squeeze(1)
             label_patch_out_real_one_hot[:, 2] = torch.where(label_patch_out_real == 2, 1, 0).squeeze(1)
-
 
             # generalized dice loss
             loss = criterion_dice(label_patch_out_pred.float(), label_patch_out_real_one_hot)
@@ -139,22 +137,18 @@ for index_epoch in tqdm(range(num_epochs), leave=False):
             images, labels = images.to(device), labels.to(device)
 
             labels_pred, model, optimizer, criterion_dice, loss = stride_depth_and_inference(model=model,
-                                                                                              optimizer=optimizer,
-                                                                                              criterion_dice=criterion_dice,
-                                                                                              images_real=images,
-                                                                                              labels_real=labels,
-                                                                                              patch_size_normal=25,
-                                                                                              patch_size_low=19,
-                                                                                              patch_size_out=9,
-                                                                                              patch_low_factor=3)
-
-
+                                                                                             optimizer=optimizer,
+                                                                                             criterion_dice=criterion_dice,
+                                                                                             images_real=images,
+                                                                                             labels_real=labels,
+                                                                                             patch_size_normal=25,
+                                                                                             patch_size_low=19,
+                                                                                             patch_size_out=9,
+                                                                                             patch_low_factor=3)
 
             # calculate loss
-
 
     loss_mse_epoch = sum(loss_list_mse) / len(loss_list_mse)
 
     duration = time.time() - time_start
-    print(f'Epoch:\t[{index_epoch+1} / {num_epochs}]\t\tTime:\t{duration} s\t\tMSE:\t{loss_mse_epoch:.5f}')
-
+    print(f'Epoch:\t[{index_epoch + 1} / {num_epochs}]\t\tTime:\t{duration} s\t\tMSE:\t{loss_mse_epoch:.5f}')
