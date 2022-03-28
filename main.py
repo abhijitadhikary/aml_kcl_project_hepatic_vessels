@@ -27,24 +27,36 @@ from losses import GeneralizedDiceLoss
 
 from stride_checker import stride_depth_and_inference
 
+
+
 patch_size_normal = 25
 patch_size_low = 19
 patch_size_out = 9
 patch_low_factor = 3
-run_mode = 'inference'
+
+batch_size = 1
+batch_size_inner = 100
+run_mode = 'train'
+
+# run inference with batch size = 1
+if run_mode == 'inference':
+    batch_size = 1
 
 dataset = DatasetHepatic(
     run_mode=run_mode,
-    label_percentage=-1,
+    label_percentage=0.0001,
     use_probabilistic=True,
     patch_size_normal=patch_size_normal,
     patch_size_low=patch_size_low,
     patch_size_out=patch_size_out,
-    patch_low_factor=patch_low_factor
+    patch_low_factor=patch_low_factor,
+    create_numpy_dataset=False,
+    dataset_variant='npy',
+    batch_size_inner=batch_size_inner
 )
 dataloader = DataLoader(
     dataset,
-    batch_size=1,
+    batch_size=batch_size,
     shuffle=False
 )
 
@@ -100,9 +112,10 @@ for index_epoch in tqdm(range(num_epochs), leave=False):
             # label_patch_out_real_one_hot[:, 0] = torch.where(label_patch_out_real == 0, 0, 1)
             # label_patch_out_real_one_hot[:, 1] = torch.where(label_patch_out_real == 1, 1, 1)
             # label_patch_out_real_one_hot[:, 2] = torch.where(label_patch_out_real == 2, 2, 1)
-            label_patch_out_real_one_hot[:, 0] = torch.where(label_patch_out_real == 0, 1, 0)
-            label_patch_out_real_one_hot[:, 1] = torch.where(label_patch_out_real == 1, 1, 0)
-            label_patch_out_real_one_hot[:, 2] = torch.where(label_patch_out_real == 2, 1, 0)
+
+            label_patch_out_real_one_hot[:, 0] = torch.where(label_patch_out_real == 0, 1, 0).squeeze(1)
+            label_patch_out_real_one_hot[:, 1] = torch.where(label_patch_out_real == 1, 1, 0).squeeze(1)
+            label_patch_out_real_one_hot[:, 2] = torch.where(label_patch_out_real == 2, 1, 0).squeeze(1)
 
 
             # generalized dice loss
