@@ -64,7 +64,29 @@ dataloader = DataLoader(
 #     batch = next(iter(dataloader))
 #     print(f'{i}\t{batch[0].shape}\t{batch[1].shape}\t{batch[2].shape}')
 
+def early_stopper(loss_list_val, loss_least_val, early_stop_patience_counter, min_early_stop):
+    '''
+        Adapter from one of my previous implementations: https://github.com/abhijitadhikary/Twitter-Sentiment-Analysis-using-LSTM/blob/master/train.py
+    '''
+    valid_loss_list_cp = loss_list_val.copy()
+    valid_loss_list_cp = valid_loss_list_cp[::-1]
 
+    current_valid_loss = valid_loss_list_cp[0]
+    if current_valid_loss < loss_least_val:
+        loss_least_val = current_valid_loss
+        early_stop_patience_counter = 0
+
+    else:
+        early_stop_condition = True
+        for index in range(min_early_stop):
+            if current_valid_loss < valid_loss_list_cp[index]:
+                early_stop_condition = False
+        if early_stop_condition is True:
+            early_stop_patience_counter += 1
+        else:
+            early_stop_patience_counter = 0
+
+    return loss_least_val, early_stop_patience_counter
 
 def run_epoch(dataloader, model, optimizer, criterion_dice, criterion_mse, criterion_ce, device, run_mode, loss_mode):
     '''
@@ -108,7 +130,7 @@ def run_epoch(dataloader, model, optimizer, criterion_dice, criterion_mse, crite
         if loss_mode == 'mse_only':
             loss_mse = criterion_mse(label_patch_out_pred.float(), label_patch_out_real_one_hot.float())
             loss_list_mse.append(loss_mse.item())
-            loss = loss_dice
+            loss = loss_mse
         if loss_mode == 'dice_n_mse':
             loss_dice = criterion_dice(label_patch_out_pred.float(), label_patch_out_real_one_hot)
             loss_mse = criterion_mse(label_patch_out_pred.float(), label_patch_out_real_one_hot.float())
@@ -127,13 +149,28 @@ def run_epoch(dataloader, model, optimizer, criterion_dice, criterion_mse, crite
         # print(loss_mse.item())
         # print(loss_list_dice_n_mse.item())
 
-    loss_dice_epoch = sum(loss_list_dice) / len(loss_list_dice)
-    loss_mse_epoch = 0
-    loss_ce_epoch = 0
+    loss_dice = sum(loss_list_dice) / len(loss_list_dice)
+    loss_mse = 0
+    loss_dice_n_mse = 0
 
-    return model, optimizer, loss_dice_epoch, loss_mse_epoch, loss_ce_epoch
+    return model, optimizer, loss_dice, loss_mse, loss_dice_n_mse
 
-def fit_model(model_name, optimizer_name, dataloader_train, dataloader_val, learning_rate, num_epochs, patience_lr_scheduler, factor_lr_scheduler, patience_early_stop, min_early_stop, loss_mode):
+def fit_model(
+        model_name,
+        optimizer_name,
+        dataloader_train,
+        dataloader_val,
+        learning_rate,
+        num_epochs,
+        patience_lr_scheduler,
+        factor_lr_scheduler,
+        patience_early_stop,
+        min_early_stop,
+        loss_mode,
+        save_condition,
+        resume_condition,
+        resume_epoch
+):
     '''
         Trains and validates a model given hyperparameters, model and optimizer name, dataloaders, num_epochs
     '''
@@ -156,6 +193,7 @@ def fit_model(model_name, optimizer_name, dataloader_train, dataloader_val, lear
             betas=(0.9, 0.999),
             amsgrad=True
         )
+
     elif optimizer_name == 'sgd_w_momentum':
         optimizer = optim.SGD(
             model.parameters(),
@@ -165,8 +203,19 @@ def fit_model(model_name, optimizer_name, dataloader_train, dataloader_val, lear
 
     # learning rate scheduler
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=patience_lr_scheduler, factor=factor_lr_scheduler, verbose=True)
-    loss_least_val = 1e12
+
     early_stop_patience_counter = 0
+    loss_best_dice = 1e12
+    loss_best_mse = 1e12
+    loss_best_dice_n_mse = 1e12
+
+    if resume_condition:
+        args, model, optimizer = load_model(resume_epoch, model, optimizer)
+
+        save_condition, index_epoch, learning_rate, model, optimizer, early_stop_patience_counter, \
+        loss_best_dice, loss_best_mse, loss_best_dice_n_mse, loss_list_dice_val, loss_list_mse_val, \
+        loss_list_dice_n_mse_val, loss_list_dice_train, loss_list_mse_train, loss_list_dice_n_mse_train, \
+        loss_mode, num_epochs, model_name, optimizer_name = args
 
     for index_epoch in tqdm(range(num_epochs), leave=False):
         time_start = time.time()
@@ -179,7 +228,7 @@ def fit_model(model_name, optimizer_name, dataloader_train, dataloader_val, lear
         loss_list_dice_n_mse_val = []
 
         # train
-        model, optimizer, loss_dice_epoch, loss_mse_epoch, loss_ce_epoch = run_epoch(
+        model, optimizer, loss_dice, loss_mse, loss_dice_n_mse = run_epoch(
             dataloader=dataloader_train,
             model=model,
             optimizer=optimizer,
@@ -191,13 +240,13 @@ def fit_model(model_name, optimizer_name, dataloader_train, dataloader_val, lear
             loss_mode=loss_mode
         )
 
-        loss_list_dice_train.append(loss_dice_epoch)
-        loss_list_mse_train.append(loss_mse_epoch)
-        loss_list_dice_n_mse_train.append(loss_mse_epoch)
+        loss_list_dice_train.append(loss_dice)
+        loss_list_mse_train.append(loss_mse)
+        loss_list_dice_n_mse_train.append(loss_mse)
 
         # validation
         with torch.no_grad():
-            _, _, loss_dice_epoch, loss_mse_epoch, loss_ce_epoch = run_epoch(
+            _, _, loss_dice, loss_mse, loss_dice_n_mse = run_epoch(
                 dataloader=dataloader_val,
                 model=model,
                 optimizer=optimizer,
@@ -209,24 +258,33 @@ def fit_model(model_name, optimizer_name, dataloader_train, dataloader_val, lear
                 loss_mode=loss_mode
             )
 
-        loss_list_dice_val.append(loss_dice_epoch)
-        loss_list_mse_val.append(loss_mse_epoch)
-        loss_list_dice_n_mse_val.append(loss_mse_epoch)
+        loss_list_dice_val.append(loss_dice)
+        loss_list_mse_val.append(loss_mse)
+        loss_list_dice_n_mse_val.append(loss_dice_n_mse)
 
         # choose which loss to put into the scheduler
-        scheduler.step(loss_dice_epoch)
+        scheduler.step(loss_dice)
 
         duration = time.time() - time_start
-        print(f'Epoch:\t[{index_epoch + 1} / {num_epochs}]\t\tTime:\t{duration} s\t\tMSE:\t{loss_mse_epoch:.5f}')
+        print(f'Epoch:\t[{index_epoch + 1} / {num_epochs}]\t\tTime:\t{duration} s\t\tMSE:\t{loss_mse:.5f}')
 
         # loss list for early stopping
+        args = save_condition, index_epoch, learning_rate, model, optimizer, early_stop_patience_counter, \
+               loss_best_dice, loss_best_mse, loss_best_dice_n_mse, loss_list_dice_val, loss_list_mse_val, \
+               loss_list_dice_n_mse_val, loss_list_dice_train, loss_list_mse_train, loss_list_dice_n_mse_train, \
+               loss_mode, num_epochs, model_name, optimizer_name
         if loss_mode == 'dice_only':
+            loss_best_dice = save_model(args, save_condition, index_epoch, loss=loss_dice, loss_best=loss_best_dice)
+            loss_least_val = loss_best_dice
             loss_list_val = loss_list_dice_val
         elif loss_mode == 'mse_only':
+            loss_best_mse = save_model(args, save_condition, index_epoch, loss=loss_mse, loss_best=loss_best_mse)
+            loss_least_val = loss_best_mse
             loss_list_val = loss_list_mse_val
         elif loss_mode == 'dice_n_mse':
+            loss_best_dice_n_mse = save_model(args, save_condition, index_epoch, loss=loss_dice_n_mse, loss_best=loss_best_dice_n_mse)
+            loss_least_val = loss_best_dice_n_mse
             loss_list_val = loss_list_dice_n_mse_val
-
 
         # check early stopping conditions
         if index_epoch > min_early_stop:
@@ -237,26 +295,58 @@ def fit_model(model_name, optimizer_name, dataloader_train, dataloader_val, lear
                 print(f'Early stopping')
                 break
 
-def early_stopper(loss_list_val, loss_least_val, early_stop_patience_counter, min_early_stop):
-    valid_loss_list_cp = loss_list_val.copy()
-    valid_loss_list_cp = valid_loss_list_cp[::-1]
+def save_model(args, save_condition, index_epoch, loss, loss_best):
+    '''
+        Saves the model, best and the latest
+    '''
 
-    current_valid_loss = valid_loss_list_cp[0]
-    if current_valid_loss < loss_least_val:
-        loss_least_val = current_valid_loss
-        early_stop_patience_counter = 0
+    checkpoint_path = 'checkpoints'
+    os.makedirs(checkpoint_path, exist_ok=True)
 
-    else:
-        early_stop_condition = True
-        for index in range(min_early_stop):
-            if current_valid_loss < valid_loss_list_cp[index]:
-                early_stop_condition = False
-        if early_stop_condition is True:
-            early_stop_patience_counter += 1
-        else:
-            early_stop_patience_counter = 0
+    # save latest model at each epoch
+    save_dict = {'index_epoch': index_epoch + 1,
+                 'model_state_dict': model.state_dict(),
+                 'optim_state_dict': optimizer.state_dict(),
+                 'args': args
+                 }
 
-    return loss_least_val, early_stop_patience_counter
+    save_path = os.path.join(checkpoint_path, f'{index_epoch+1}.pth')
+    torch.save(save_dict, save_path)
+    save_path = os.path.join(checkpoint_path, f'latest.pth')
+    torch.save(save_dict, save_path)
+
+    if loss < loss_best and save_condition:
+        loss_best = loss
+        save_dict = {'index_epoch': index_epoch + 1,
+                     'model_state_dict': model.state_dict(),
+                     'optim_state_dict': optimizer.state_dict(),
+                     'args': args
+                     }
+
+        save_path = os.path.join(checkpoint_path, f'best.pth')
+        torch.save(save_dict, save_path)
+        print(f'*********************** New best model saved at {args.index_epoch+1} ***********************')
+    return loss_best
+
+def load_model(resume_epoch, model, optimizer):
+    '''
+        Loads the model
+    '''
+    load_path = os.path.join('checkpoints', f'{resume_epoch}.pth')
+
+    if not os.path.exists(load_path):
+        raise FileNotFoundError(f'File {load_path} doesn\'t exist')
+
+    checkpoint = torch.load(load_path)
+
+    index_epoch = checkpoint['index_epoch']
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optim_state_dict'])
+    args = checkpoint['args']
+
+    print(f'Model successfully loaded from epoch {index_epoch+1}')
+
+    return args, model, optimizer
 
 
 fit_model(
@@ -270,12 +360,17 @@ fit_model(
     factor_lr_scheduler=0.1,
     patience_early_stop=5,
     min_early_stop=10,
-    loss_mode='dice_only' # dice_only, mse_only, dice_n_mse
+    loss_mode='dice_only', # dice_only, mse_only, dice_n_mse
+    save_condition=True,
+    resume_condition=False,
+    resume_epoch=1
 )
 
 
 if run_mode == 'inference':
-    for index_batch, batch in enumerate(dataloader):
+    device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
+
+    for index_batch, batch in enumerate(dataloader_inference):
         images, labels = batch
         images, labels = images.to(device), labels.to(device)
 
