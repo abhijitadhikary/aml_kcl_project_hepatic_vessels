@@ -46,31 +46,6 @@ assert batch_size == 1 or batch_size_inner == 1, 'either batch_size or batch_siz
 train_percentage = 0.8
 
 
-def early_stopper(loss_list_val, loss_least_val, early_stop_patience_counter, min_early_stop):
-    '''
-        Adapter from one of my previous implementations: https://github.com/abhijitadhikary/Twitter-Sentiment-Analysis-using-LSTM/blob/master/train.py
-    '''
-    valid_loss_list_cp = loss_list_val.copy()
-    valid_loss_list_cp = valid_loss_list_cp[::-1]
-
-    current_valid_loss = valid_loss_list_cp[0]
-    if current_valid_loss < loss_least_val:
-        loss_least_val = current_valid_loss
-        early_stop_patience_counter = 0
-
-    else:
-        early_stop_condition = True
-        for index in range(min_early_stop):
-            if current_valid_loss < valid_loss_list_cp[index]:
-                early_stop_condition = False
-        if early_stop_condition is True:
-            early_stop_patience_counter += 1
-        else:
-            early_stop_patience_counter = 0
-
-    return loss_least_val, early_stop_patience_counter
-
-
 # def save_model(args, save_condition, model, optimizer, scheduler, index_epoch, loss, loss_best):
 #     '''
 #         Saves the model, best and the latest
@@ -106,63 +81,6 @@ def early_stopper(loss_list_val, loss_least_val, early_stop_patience_counter, mi
 #     return loss_best
 
 
-def run_inference(
-        model_name,
-        loss_name,
-        patch_size_normal=25,
-        patch_size_low=19,
-        patch_size_out=9,
-        patch_low_factor=3,
-        batch_size=1,
-        batch_size_inner=16,  # either batch_size or batch_size_inner MUST be set to 1
-        train_percentage=0.8,
-        load_model=False,
-        load_epoch='best'
-
-):
-    '''
-        Run 3D inference on the validation set. Generates a 3D volume of predicted labels with same shape as the original one
-    '''
-
-    device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
-
-    _, _, dataloader_inference = get_dataloaders(
-        patch_size_normal,
-        patch_size_low,
-        patch_size_out,
-        patch_low_factor,
-        batch_size,
-        batch_size_inner,
-        train_percentage
-    )
-
-    if model_name == 'deep_medic':
-        model = DeepMedic().to(device)
-
-    # loss funcitons
-    criterion_mse = nn.MSELoss()
-    criterion_dice = GeneralizedDiceLoss().dice
-    criterion_ce = nn.CrossEntropyLoss()
-
-    for index_batch, batch in enumerate(dataloader_inference):
-        images, labels = batch
-        images, labels = images.to(device), labels.to(device)
-
-        labels_pred, model, criterion_dice, loss_dice, loss_mse = stride_depth_and_inference(
-            model=model,
-            criterion_dice=criterion_dice,
-            criterion_mse=criterion_mse,
-            images_real=images,
-            labels_real=labels,
-            patch_size_normal=patch_size_normal,
-            patch_size_low=patch_size_low,
-            patch_size_out=patch_size_out,
-            patch_low_factor=patch_low_factor
-        )
-
-        self.__print__(f'{index_batch}\tLoss DICE:\t{loss_dice}\tLoss MSE:\t{loss_mse}')
-
-
 class ModelConainer():
 
     def __init__(self):
@@ -182,6 +100,7 @@ class ModelConainer():
         }
 
     def __init_train_params__(self):
+        self.run_mode = 'train'
         self.params_train = {
             'optimizer_name': 'adam',  # adam, sgd_w_momentum
             'loss_name': 'ce',  # dice, mse, ce, dice_n_mse
@@ -255,13 +174,18 @@ class ModelConainer():
             'batch_size_inner'] == 1, 'either must be 1, size issue'
 
     def __init_inference_params__(self):
+        self.run_mode = 'inference'
         self.params_inference = {
             'loss_name': 'dice',
             'batch_size': 1,
             'batch_size_inner': 16,  # either batch_size or batch_size_inner MUST be set to 1
             'train_percentage': 0.8,
-            'load_model': False,
-            'load_epoch': 'best'
+
+            'resume_dir': '10-58-57__29-03-2022__deep_medic__ce__adam__lr_0.0001__ep_50',
+            'resume_epoch': 2,
+            'path_checkpoint': 'checkpoints',
+            'path_checkpoint_full': '',
+            'dirname_checkpoint': '',
         }
 
     def __setup_logger__(self):
@@ -318,15 +242,12 @@ class ModelConainer():
 
     def inference(self):
         self.__init_inference_params__()
-        self.__run_inference__()
+        self.__run_inference()
 
-    def __run_inference__(self):
-        pass
-
-    def __set_device__(self):
+    def __set_device(self):
         self.device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
 
-    def __get_dataloaders__(self, run_mode):
+    def __get_dataloaders(self, run_mode):
         if run_mode == 'train':
             self.dataset_train = DatasetHepatic(
                 run_mode='train',
@@ -387,11 +308,11 @@ class ModelConainer():
                 shuffle=True
             )
 
-    def __define_model__(self):
+    def __define_model(self):
         if self.params_model['model_name'] == 'deep_medic':
             self.model = DeepMedic().to(self.device)
 
-    def __define_criterions__(self):
+    def __define_criterions(self):
         self.criterion_mse = nn.MSELoss()
         self.criterion_dice = GeneralizedDiceLoss().dice
         self.criterion_ce = nn.CrossEntropyLoss()
@@ -440,6 +361,30 @@ class ModelConainer():
 
         return output
 
+    def __early_stopper(self, loss_list_val, loss_least_val, early_stop_patience_counter, min_early_stop):
+        '''
+            Adapter from one of my previous implementations: https://github.com/abhijitadhikary/Twitter-Sentiment-Analysis-using-LSTM/blob/master/train.py
+        '''
+        valid_loss_list_cp = loss_list_val.copy()
+        valid_loss_list_cp = valid_loss_list_cp[::-1]
+
+        current_valid_loss = valid_loss_list_cp[0]
+        if current_valid_loss < loss_least_val:
+            loss_least_val = current_valid_loss
+            early_stop_patience_counter = 0
+
+        else:
+            early_stop_condition = True
+            for index in range(min_early_stop):
+                if current_valid_loss < valid_loss_list_cp[index]:
+                    early_stop_condition = False
+            if early_stop_condition is True:
+                early_stop_patience_counter += 1
+            else:
+                early_stop_patience_counter = 0
+
+        return loss_least_val, early_stop_patience_counter
+
     def __save_model__(self):
         '''
             Saves the model, best and the latest
@@ -473,41 +418,59 @@ class ModelConainer():
                 torch.save(save_dict, save_path)
                 self.__print__(f'{"*" * 10}\tNew best model saved at:\t{self.index_epoch + 1}\t{"*" * 10}')
 
-    def __load_model__(self):
+    def __load_model(self):
         '''
             Loads the model
         '''
-        if self.params_train['resume_condition']:
-            filename_checkpoint = f'{self.params_train["resume_epoch"]}.pth'
-            load_path = os.path.join(self.params_train['path_checkpoint'],
-                                     self.params_train['resume_dir'],
+        if self.run_mode == 'train':
+            if self.params_train['resume_condition']:
+                filename_checkpoint = f'{self.params_train["resume_epoch"]}.pth'
+                load_path = os.path.join(self.params_train['path_checkpoint'],
+                                         self.params_train['resume_dir'],
+                                         filename_checkpoint)
+
+                if not os.path.exists(load_path):
+                    raise FileNotFoundError(f'File {load_path} doesn\'t exist')
+
+                checkpoint = torch.load(load_path)
+
+                self.index_epoch = checkpoint['index_epoch']
+                self.model.load_state_dict(checkpoint['model_state_dict'])
+                self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                self.lr_scheduler.load_state_dict(checkpoint['lr_scheduler_state_dict'])
+                self.params_model = checkpoint['params_model']
+                self.params_train = checkpoint['params_train']
+                self.loss_dict_train = checkpoint['loss_dict_train']
+                self.loss_dict_val = checkpoint['loss_dict_val']
+                self.loss_best_train = checkpoint['loss_best_train']
+                self.loss_best_val = checkpoint['loss_best_val']
+
+                self.__print__(f'Model loaded from epoch:\t{self.index_epoch}')
+                self.index_epoch += 1
+                self.start_epoch = self.index_epoch
+                self.__print__(f'Resuming training from epoch:\t{self.index_epoch}')
+
+        elif self.run_mode == 'inference':
+            filename_checkpoint = f'{self.params_inference["resume_epoch"]}.pth'
+            load_path = os.path.join(self.params_inference['path_checkpoint'],
+                                     self.params_inference['resume_dir'],
                                      filename_checkpoint)
 
             if not os.path.exists(load_path):
                 raise FileNotFoundError(f'File {load_path} doesn\'t exist')
 
             checkpoint = torch.load(load_path)
-
             self.index_epoch = checkpoint['index_epoch']
             self.model.load_state_dict(checkpoint['model_state_dict'])
-            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            self.lr_scheduler.load_state_dict(checkpoint['lr_scheduler_state_dict'])
             self.params_model = checkpoint['params_model']
-            self.params_train = checkpoint['params_train']
-            self.loss_dict_train = checkpoint['loss_dict_train']
-            self.loss_dict_val = checkpoint['loss_dict_val']
-            self.loss_best_train = checkpoint['loss_best_train']
-            self.loss_best_val = checkpoint['loss_best_val']
-
-            self.__print__(f'Model loaded from epoch:\t{self.index_epoch}')
             self.index_epoch += 1
-            self.start_epoch = self.index_epoch
-            self.__print__(f'Resuming training from epoch:\t{self.index_epoch}')
+            self.__print__(f'Model loaded from epoch:\t{self.index_epoch}')
 
     def __early_stop__(self):
         '''
             If early stopping condition meets, break training
         '''
+        # TODO fix this early stopper
         if self.index_epoch > self.params_train['min_epochs_to_train']:
             if self.params_train['early_stop_patience_counter'] > self.params_train['patience_early_stop']:
                 self.__print__(f'Early stopping at epoch:\t{self.index_epoch + 1}')
@@ -653,10 +616,10 @@ class ModelConainer():
         '''
 
         # set up dataloaders, model, criterions, optimizers, schedulers
-        self.__set_device__()
-        self.__get_dataloaders__('train')
-        self.__define_model__()
-        self.__define_criterions__()
+        self.__set_device()
+        self.__get_dataloaders('train')
+        self.__define_model()
+        self.__define_criterions()
         self.__define_optimizr__()
         self.__define_lr_scheduler__()
 
@@ -665,7 +628,7 @@ class ModelConainer():
         self.break_training_condition = False
         self.end_epoch = self.params_train['num_epochs']
 
-        self.__load_model__()
+        self.__load_model()
 
         for index_epoch in range(self.start_epoch, self.end_epoch):
             time_start = time.time()
@@ -703,43 +666,234 @@ class ModelConainer():
             if self.break_training_condition:
                 break
 
+    def __run_inference(self):
+        '''
+            Run 3D inference on the validation set. Generates a 3D volume of predicted labels with same shape as the original one
+        '''
+        self.__set_device()
+        self.__get_dataloaders('inference')
+        self.__define_model()
+        self.__define_criterions()
+        self.__load_model()
+
+        self.__print__(f'{"*" * 100}')
+        self.__print__('\t\tInference starting with params:')
+        self.__print__(f'{"*" * 100}')
+        self.__print__(f'params_model:\n{self.params_model}')
+        self.__print__(f'params_inference:\n{self.params_inference}')
+        self.__print__(f'{"*" * 100}')
+
+        for index_batch, batch in enumerate(self.dataloader_inference):
+            (images, labels) = self.__put_to_device__(self.device, batch)
+
+            labels_pred, loss_dice, loss_mse = self.__stride_depth_and_inference(
+                images_real=images,
+                labels_real=labels
+            )
+
+            self.__print__(f'{index_batch}\tLoss DICE:\t{loss_dice}\tLoss MSE:\t{loss_mse}')
+
+    def __stride_depth_and_inference(self, images_real, labels_real):
+
+        self.model.eval()
+        patch_size_normal = self.params_model['patch_size_normal']
+        patch_size_low = self.params_model['patch_size_low']
+        patch_size_out = self.params_model['patch_size_out']
+        patch_low_factor = self.params_model['patch_low_factor']
+
+        with torch.no_grad():
+            loss_list_dice = []
+            loss_list_mse = []
+
+            device = images_real.device
+            batch_size, height, width, depth = images_real.shape
+
+            # --------- loop through the whole image volume
+            patch_size_low_up = patch_size_low * patch_low_factor
+
+            patch_half_normal = (patch_size_normal - 1) // 2
+            patch_half_low = (patch_size_low - 1) // 2
+            patch_half_low_up = (patch_size_low_up - 1) // 2
+            patch_half_out = (patch_size_out - 1) // 2
+
+            height_new = height + patch_size_low_up
+            width_new = width + patch_size_low_up
+            depth_new = depth + patch_size_low_up
+
+            # create a placeholder for the padded image
+            images_padded = torch.zeros((batch_size, height_new, width_new, depth_new), dtype=torch.float32).to(device)
+            # labels_padded = torch.zeros((batch_size, height_new, width_new, depth_new), dtype=torch.float32).to(device)
+
+            # copy the original image to the placeholder
+            images_padded[
+            :,
+            patch_half_low_up: height + patch_half_low_up,
+            patch_half_low_up: width + patch_half_low_up,
+            patch_half_low_up: depth + patch_half_low_up
+            ] = copy.deepcopy(images_real).to(device)
+
+            # placeholder to store the inferred/reconstructed image labels
+            labels_pred_whole_image = torch.zeros_like(images_real).to(device)
+
+            # indices of the original image
+            h_start_orig = 0
+            h_end_orig = h_start_orig + patch_size_out
+
+            for index_h in tqdm(range(patch_half_low_up + patch_half_out, height_new - patch_half_out, patch_size_out),
+                                leave=False):
+
+                h_start_normal = index_h - patch_half_normal
+                h_end_normal = index_h + patch_half_normal + 1
+
+                h_start_low_up = index_h - patch_half_low_up
+                h_end_low_up = index_h + patch_half_low_up + 1
+
+                h_start_out = index_h - patch_half_out
+                h_end_out = index_h + patch_half_out + 1
+
+                if h_end_out > height_new:
+                    break
+
+                w_start_orig = 0
+                w_end_orig = w_start_orig + patch_size_out
+
+                for index_w in range(patch_half_low_up + patch_half_out, width_new - patch_half_out, patch_size_out):
+
+                    w_start_normal = index_w - patch_half_normal
+                    w_end_normal = index_w + patch_half_normal + 1
+
+                    w_start_low_up = index_w - patch_half_low_up
+                    w_end_low_up = index_w + patch_half_low_up + 1
+
+                    w_start_out = index_w - patch_half_out
+                    w_end_out = index_w + patch_half_out + 1
+
+                    if w_end_out > width_new:
+                        break
+
+                    d_start_orig = 0
+                    d_end_orig = d_start_orig + patch_size_out
+
+                    for index_d in range(patch_half_low_up + patch_half_out, depth_new - patch_half_out,
+                                         patch_size_out):
+
+                        d_start_normal = index_d - patch_half_normal
+                        d_end_normal = index_d + patch_half_normal + 1
+
+                        d_start_low_up = index_d - patch_half_low_up
+                        d_end_low_up = index_d + patch_half_low_up + 1
+
+                        d_start_out = index_d - patch_half_out
+                        d_end_out = index_d + patch_half_out + 1
+
+                        if d_end_out > depth_new:
+                            break
+
+                        # extract the current patch of the expanded image
+                        image_patch_normal = images_padded[
+                                             :,
+                                             h_start_normal: h_end_normal,
+                                             w_start_normal: w_end_normal,
+                                             d_start_normal: d_end_normal
+                                             ]
+
+                        image_patch_low_up = images_padded[
+                                             :,
+                                             h_start_low_up: h_end_low_up,
+                                             w_start_low_up: w_end_low_up,
+                                             d_start_low_up: d_end_low_up
+                                             ]
+
+                        # extract the current output patch of the expanded label
+                        label_patch_out_real = labels_real[
+                                               :,
+                                               h_start_out: h_end_out,
+                                               w_start_out: w_end_out,
+                                               d_start_out: d_end_out
+                                               ]
+
+                        # pad uneven images
+                        image_patch_normal_temp = torch.zeros(
+                            (batch_size, patch_size_normal, patch_size_normal, patch_size_normal)).to(device)
+                        image_patch_normal_temp[:, :image_patch_normal.shape[1], :image_patch_normal.shape[2],
+                        :image_patch_normal.shape[3]] = image_patch_normal
+                        image_patch_normal = image_patch_normal_temp
+
+                        image_patch_low_up_temp = torch.zeros(
+                            (batch_size, patch_size_low_up, patch_size_low_up, patch_size_low_up)).to(device)
+                        image_patch_low_up_temp[:, :image_patch_low_up.shape[1], :image_patch_low_up.shape[2],
+                        :image_patch_low_up.shape[3]] = image_patch_low_up
+                        image_patch_low_up = image_patch_low_up_temp
+
+                        # resize (downsample) image_patch_low
+                        image_patch_low = F.avg_pool3d(input=image_patch_low_up, kernel_size=3, stride=None)
+
+                        # perform forward pass
+                        label_patch_out_pred = self.model.forward(
+                            (image_patch_normal.unsqueeze(0), image_patch_low.unsqueeze(0)))
+
+                        # print(label_patch_out_real.shape)
+                        # clip extra parts
+                        if label_patch_out_real.shape[1] < patch_size_out:
+                            label_patch_out_pred = label_patch_out_pred[:, :, :label_patch_out_real.shape[1], :, :]
+
+                        if label_patch_out_real.shape[2] < patch_size_out:
+                            label_patch_out_pred = label_patch_out_pred[:, :, :, :label_patch_out_real.shape[2], :]
+
+                        if label_patch_out_real.shape[3] < patch_size_out:
+                            label_patch_out_pred = label_patch_out_pred[:, :, :, :, :label_patch_out_real.shape[3]]
+
+                        # # remove any dimensions with 0 elements
+                        # if (label_patch_out_pred.shape[2] == 0) or (label_patch_out_pred.shape[3] == 0) or (label_patch_out_pred.shape[4] == 0) or (
+                        #         label_patch_out_real.shape[2] == 0) or (label_patch_out_real.shape[3] == 0) or (
+                        #         label_patch_out_real.shape[4] == 0):
+                        #     break
+
+                        # print(label_patch_out_pred.shape)
+                        # convert label_patch_out_real to one hot
+                        label_patch_out_real_one_hot = torch.zeros_like(label_patch_out_pred).to(device)
+                        # print(label_patch_out_real_one_hot.shape)
+                        label_patch_out_real_one_hot[:, 0] = torch.where(label_patch_out_real == 0, 1, 0)
+                        label_patch_out_real_one_hot[:, 1] = torch.where(label_patch_out_real == 1, 1, 0)
+                        label_patch_out_real_one_hot[:, 2] = torch.where(label_patch_out_real == 2, 1, 0)
+
+                        # cross-entropy loss_dice
+                        loss_dice = self.criterion_dice(F.softmax(label_patch_out_pred.float(), dim=1),
+                                                        label_patch_out_real_one_hot.float())
+                        loss_mse = self.criterion_mse(F.softmax(label_patch_out_pred.float(), dim=1),
+                                           label_patch_out_real_one_hot.float())
+                        loss_list_dice.append(loss_dice)
+                        loss_list_mse.append(loss_mse)
+                        # print(loss_dice)
+
+                        label_patch_out_pred_double = torch.argmax(label_patch_out_pred.detach(), dim=1)
+                        label_patch_out_pred_double_temp = torch.zeros(batch_size, patch_size_out, patch_size_out,
+                                                                       patch_size_out).to(device)
+                        label_patch_out_pred_double_temp[:, :label_patch_out_pred_double.shape[1],
+                        :label_patch_out_pred_double.shape[2],
+                        :label_patch_out_pred_double.shape[3]] = label_patch_out_pred_double
+                        label_patch_out_pred_double = label_patch_out_pred_double_temp
+
+                        bs, h, w, d = labels_pred_whole_image[:, h_start_orig: h_end_orig, w_start_orig: w_end_orig,
+                                      d_start_orig: d_end_orig].shape
+                        labels_pred_whole_image[:, h_start_orig: h_end_orig, w_start_orig: w_end_orig,
+                        d_start_orig: d_end_orig] = label_patch_out_pred_double[:, :h, :w, :d]
+
+                        d_start_orig = d_start_orig + patch_size_out
+                        d_end_orig = d_end_orig + patch_size_out
+
+                    w_start_orig = w_start_orig + patch_size_out
+                    w_end_orig = w_end_orig + patch_size_out
+
+                h_start_orig = h_start_orig + patch_size_out
+                h_end_orig = h_end_orig + patch_size_out
+
+                loss_dice = sum(loss_list_dice) / len(loss_list_dice)
+                loss_mse = sum(loss_list_mse) / len(loss_list_mse)
+
+        return labels_pred_whole_image, loss_dice, loss_mse
+
 
 model_container = ModelConainer()
-model_container.train()
-print()
-# fit_model(
-#     model_name='deep_medic',
-#     optimizer_name='adam',  # adam, sgd_w_momentum
-#     learning_rate=0.0001,
-#     num_epochs=50,
-#     patience_lr_scheduler=3,
-#     factor_lr_scheduler=0.1,
-#     patience_early_stop=5,
-#     min_early_stop=10,
-#     loss_name='dice',  # dice, mse, dice_n_mse
-#     save_condition=False,
-#     resume_condition=True,
-#     resume_epoch=3,
-#
-#     patch_size_normal=25,
-#     patch_size_low=19,
-#     patch_size_out=9,
-#     patch_low_factor=3,
-#     batch_size=1,
-#     batch_size_inner=16, # either batch_size or batch_size_inner MUST be set to 1
-#     train_percentage=0.8
-# )
-
-# run_inference(
-#         model_name='deep_medic',
-#         loss_name='dice',
-#         patch_size_normal=25,
-#         patch_size_low=19,
-#         patch_size_out=9,
-#         patch_low_factor=3,
-#         batch_size=1,
-#         batch_size_inner=16,  # either batch_size or batch_size_inner MUST be set to 1
-#         train_percentage=0.8,
-#         load_model=False,
-#         load_epoch='best'
-# )
+# model_container.train()
+model_container.inference()
