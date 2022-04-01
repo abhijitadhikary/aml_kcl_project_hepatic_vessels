@@ -45,6 +45,67 @@ assert batch_size == 1 or batch_size_inner == 1, 'either batch_size or batch_siz
 
 train_percentage = 0.8
 
+
+class GeneralizedDiceLoss(nn.Module):
+    '''
+        Following the equation from https://arxiv.org/abs/1707.03237 page 3
+    '''
+    def __init__(self):
+        super(GeneralizedDiceLoss, self).__init__()
+
+    def forward(self, im_pred, im_real):
+        # weights = torch.zeros(3)
+        # for index in range(3):
+        #     count = torch.tensor(torch.sum(torch.where(im_real == index, 1, 0)), dtype=torch.double, requires_grad=True)
+        #     # if none of the voxels are of the current category, set weight to 1
+        #     if count == 0:
+        #         weights[index] = copy.deepcopy(torch.tensor(1, dtype=torch.double, requires_grad=True))
+        #     else:
+        #         weights[index] = 1 / count ** 2
+        #
+        # numerator = torch.zeros(3, dtype=torch.double, requires_grad=True)
+        # denominator = torch.zeros(3, dtype=torch.double, requires_grad=True)
+        #
+        # for index in range(3):
+        #     r_l_n = torch.where(im_real == index, 1, 0)
+        #     p_l_n = torch.where(im_pred == index, 1, 0)
+        #
+        #     # numerator
+        #     numerator[index] = weights[index] * torch.sum(r_l_n * p_l_n)
+        #
+        #     current_denominator = weights[index] * (torch.sum(r_l_n) + torch.sum(p_l_n))
+        #     denominator[index] = current_denominator
+        #
+        # dice_loss = 1 - (2 * torch.sum(numerator) / torch.sum(denominator))
+
+        im_real = im_real.permute((1, 0, 2, 3, 4))
+        im_pred = im_pred.permute((1, 0, 2, 3, 4))
+
+        eps = 1e-12
+        sum_1 = torch.sum(im_real[0])
+        sum_2 = torch.sum(im_real[1])
+        sum_3 = torch.sum(im_real[2])
+
+        weight_1 = 1 / (sum_1 ** 2 + eps) if sum_1 > 0 else 1
+        weight_2 = 1 / (sum_2 ** 2 + eps) if sum_2 > 0 else 1
+        weight_3 = 1 / (sum_3 ** 2 + eps) if sum_3 > 0 else 1
+
+        numerator_1 = torch.sum(im_real[0] * im_pred[0]) * weight_1
+        numerator_2 = torch.sum(im_real[1] * im_pred[1]) * weight_2
+        numerator_3 = torch.sum(im_real[2] * im_pred[2]) * weight_3
+
+        numerator = numerator_1 + numerator_2 + numerator_3
+
+        denominator_1 = (torch.sum(im_real[0]) + torch.sum(im_pred[0])) * weight_1
+        denominator_2 = (torch.sum(im_real[1]) + torch.sum(im_pred[1])) * weight_2
+        denominator_3 = (torch.sum(im_real[2]) + torch.sum(im_pred[2])) * weight_3
+
+        denominator = denominator_1 + denominator_2 + denominator_3
+
+        dice_loss = 1 - ((2 * numerator) / (denominator + eps))
+
+        return dice_loss
+
 class ModelConainer():
     def __init__(self):
         self.__init_model_params()
@@ -83,8 +144,8 @@ class ModelConainer():
             'min_early_stop': 10,
             'save_every_epoch': True,
 
-            'save_condition': False,  # whether to save the model
-            'resume_condition': True,  # whether to resume training
+            'save_condition': True,  # whether to save the model
+            'resume_condition': False,  # whether to resume training
 
             'resume_dir': '10-58-57__29-03-2022__deep_medic__ce__adam__lr_0.0001__ep_50',
             'resume_epoch': 2,
@@ -277,7 +338,7 @@ class ModelConainer():
 
     def __define_criterions(self):
         self.criterion_mse = nn.MSELoss()
-        self.criterion_dice = self.__criterion_generalized_dice
+        self.criterion_dice = GeneralizedDiceLoss()
         self.criterion_ce = nn.CrossEntropyLoss()
 
     def __define_optimizr(self):
@@ -328,21 +389,17 @@ class ModelConainer():
         '''
             Following the equation from https://arxiv.org/abs/1707.03237 page 3
         '''
-        weights = torch.zeros(3, dtype=torch.float64)
+        weights = torch.autograd.Variable(3, dtype=torch.float64, requires_grad=True)
         for index in range(3):
-            count = torch.sum(torch.where(im_real == index, 1, 0))
+            count = torch.tensor(torch.sum(torch.where(im_real == index, 1, 0)), dtype=torch.double, requires_grad=True)
             # if none of the voxels are of the current category, set weight to 1
             if count == 0:
-                current_weight = 1
+                weights[index] = torch.tensor(1, dtype=torch.double, requires_grad=True)
             else:
-                current_weight = 1 / count ** 2
-                # for numerical stability
-                # if current_weight < eps:
-                #     current_weight = eps
-            weights[index] = current_weight
+                weights[index] = 1 / count ** 2
 
-        numerator = torch.zeros(3, dtype=torch.double)
-        denominator = torch.zeros(3, dtype=torch.double)
+        numerator = torch.zeros(3, dtype=torch.double, requires_grad=True)
+        denominator = torch.zeros(3, dtype=torch.double, requires_grad=True)
 
         for index in range(3):
             r_l_n = torch.where(im_real == index, 1, 0)
@@ -547,7 +604,7 @@ class ModelConainer():
             # print(loss_dice.item())
             # print(loss_mse.item())
             # print(loss_list_dice_n_mse.item())
-            break
+            # break
 
         # loss_dice = sum(loss_list_dice) / len(loss_list_dice)
         # loss_mse = 0
@@ -889,3 +946,66 @@ class ModelConainer():
 model_container = ModelConainer()
 model_container.train()
 # model_container.inference()
+
+
+
+# def gdl(im_pred, im_real):
+#     weights = torch.zeros(3)
+#     for index in range(3):
+#         count = torch.sum(torch.where(im_real == index, 1, 0))
+#         # if none of the voxels are of the current category, set weight to 1
+#         if count == 0:
+#             weights[index] = copy.deepcopy(torch.tensor(1, dtype=torch.double))
+#         else:
+#             weights[index] = 1 / count ** 2
+#
+#     numerator = torch.zeros(3, dtype=torch.double)
+#     denominator = torch.zeros(3, dtype=torch.double)
+#
+#     for index in range(3):
+#         r_l_n = torch.where(im_real == index, 1, 0)
+#         p_l_n = torch.where(im_pred == index, 1, 0)
+#
+#         # numerator
+#         numerator[index] = weights[index] * torch.sum(r_l_n * p_l_n)
+#
+#         current_denominator = weights[index] * (torch.sum(r_l_n) + torch.sum(p_l_n))
+#         denominator[index] = current_denominator
+#
+#     dice_loss_ = 1 - (2 * torch.sum(numerator) / torch.sum(denominator))
+#
+#     im_real = im_real.permute((1, 0, 2, 3, 4))
+#     im_pred = im_pred.permute((1, 0, 2, 3, 4))
+#
+#     eps = 1e-12
+#     sum_1 = torch.sum(im_real[0])
+#     sum_2 = torch.sum(im_real[1])
+#     sum_3 = torch.sum(im_real[2])
+#
+#     weight_1 = 1 / (sum_1**2 + eps) if sum_1 > 0 else 1
+#     weight_2 = 1 / (sum_2**2 + eps) if sum_2 > 0 else 1
+#     weight_3 = 1 / (sum_3**2 + eps) if sum_3 > 0 else 1
+#
+#     numerator_1 = torch.sum(im_real[0] * im_pred[0]) * weight_1
+#     numerator_2 = torch.sum(im_real[1] * im_pred[1]) * weight_2
+#     numerator_3 = torch.sum(im_real[2] * im_pred[2]) * weight_3
+#
+#     numerator = numerator_1 + numerator_2 + numerator_3
+#
+#     denominator_1 = (torch.sum(im_real[0]) + torch.sum(im_pred[0])) * weight_1
+#     denominator_2 = (torch.sum(im_real[1]) + torch.sum(im_pred[1])) * weight_2
+#     denominator_3 = (torch.sum(im_real[2]) + torch.sum(im_pred[2])) * weight_3
+#
+#     denominator = denominator_1 + denominator_2 + denominator_3
+#
+#     dice_loss = ((2 * numerator) / (denominator + eps))
+#
+#
+#
+#
+#
+#     return dice_loss
+#
+# real = torch.ones((10, 3, 512, 512, 50))
+# pred = torch.ones((10, 3, 512, 512, 50))
+# print(gdl(pred, real).item())
