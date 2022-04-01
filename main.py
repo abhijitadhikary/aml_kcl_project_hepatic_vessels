@@ -46,7 +46,6 @@ assert batch_size == 1 or batch_size_inner == 1, 'either batch_size or batch_siz
 train_percentage = 0.8
 
 class ModelConainer():
-
     def __init__(self):
         self.__init_model_params()
 
@@ -67,7 +66,7 @@ class ModelConainer():
         self.run_mode = 'train'
         self.params_train = {
             'optimizer_name': 'adam',  # adam, sgd_w_momentum
-            'loss_name': 'ce',  # dice, mse, ce, dice_n_mse
+            'loss_name': 'dice',  # dice, mse, ce, dice_n_mse
             'beta_1': 0.9,
             'beta_2': 0.999,
             'momentum': 0.9,
@@ -278,7 +277,7 @@ class ModelConainer():
 
     def __define_criterions(self):
         self.criterion_mse = nn.MSELoss()
-        self.criterion_dice = GeneralizedDiceLoss().dice
+        self.criterion_dice = self.__criterion_generalized_dice
         self.criterion_ce = nn.CrossEntropyLoss()
 
     def __define_optimizr(self):
@@ -325,29 +324,40 @@ class ModelConainer():
 
         return output
 
-    # def __early_stopper(self):
-    #     '''
-    #         Adapter from one of my previous implementations: https://github.com/abhijitadhikary/Twitter-Sentiment-Analysis-using-LSTM/blob/master/train.py
-    #     '''
-    #     valid_loss_list_cp = loss_list_val.copy()
-    #     valid_loss_list_cp = valid_loss_list_cp[::-1]
-    #
-    #     current_valid_loss = valid_loss_list_cp[0]
-    #     if current_valid_loss < loss_least_val:
-    #         loss_least_val = current_valid_loss
-    #         early_stop_patience_counter = 0
-    #
-    #     else:
-    #         early_stop_condition = True
-    #         for index in range(min_early_stop):
-    #             if current_valid_loss < valid_loss_list_cp[index]:
-    #                 early_stop_condition = False
-    #         if early_stop_condition is True:
-    #             early_stop_patience_counter += 1
-    #         else:
-    #             early_stop_patience_counter = 0
-    #
-    #     return loss_least_val, early_stop_patience_counter
+    def __criterion_generalized_dice(self, im_real, im_pred):
+        '''
+            Following the equation from https://arxiv.org/abs/1707.03237 page 3
+        '''
+        weights = torch.zeros(3, dtype=torch.float64)
+        for index in range(3):
+            count = torch.sum(torch.where(im_real == index, 1, 0))
+            # if none of the voxels are of the current category, set weight to 1
+            if count == 0:
+                current_weight = 1
+            else:
+                current_weight = 1 / count ** 2
+                # for numerical stability
+                # if current_weight < eps:
+                #     current_weight = eps
+            weights[index] = current_weight
+
+        numerator = torch.zeros(3, dtype=torch.double)
+        denominator = torch.zeros(3, dtype=torch.double)
+
+        for index in range(3):
+            r_l_n = torch.where(im_real == index, 1, 0)
+            p_l_n = torch.where(im_pred == index, 1, 0)
+
+            # numerator
+            mult = r_l_n * p_l_n
+            numerator[index] = weights[index] * torch.sum(mult)
+
+            current_denominator = weights[index] * (torch.sum(r_l_n) + torch.sum(p_l_n))
+            denominator[index] = current_denominator
+
+        dice_loss = 1 - (2 * torch.sum(numerator) / torch.sum(denominator))
+
+        return dice_loss
 
     def __save_model(self):
         '''
