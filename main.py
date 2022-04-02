@@ -787,6 +787,7 @@ class ModelConainer():
         for index_batch, batch in enumerate(self.dataloader_inference):
             (images, labels) = self.__put_to_device(self.device, batch)
 
+
             labels_pred, loss_dice, loss_mse = self.__stride_depth_and_inference(
                 images_real=images,
                 labels_real=labels
@@ -795,7 +796,6 @@ class ModelConainer():
             self.__print(f'{index_batch}\tLoss DICE:\t{loss_dice:.5f}\tLoss MSE:\t{loss_mse:.5f}')
 
     def __stride_depth_and_inference(self, images_real, labels_real):
-
         self.model.eval()
         patch_size_normal = self.params_model['patch_size_normal']
         patch_size_low = self.params_model['patch_size_low']
@@ -913,6 +913,9 @@ class ModelConainer():
                                                d_start_out: d_end_out
                                                ]
 
+                        if not (label_patch_out_real.shape[1] * label_patch_out_real.shape[2] * label_patch_out_real.shape[3] > 0):
+                            continue
+
                         # pad uneven images
                         image_patch_normal_temp = torch.zeros(
                             (batch_size, patch_size_normal, patch_size_normal, patch_size_normal)).to(device)
@@ -963,7 +966,7 @@ class ModelConainer():
                                                         label_patch_out_real_one_hot.float())
                         loss_mse = self.criterion_mse(F.softmax(label_patch_out_pred.float(), dim=1),
                                                       label_patch_out_real_one_hot.float())
-                        print(loss_mse.item())
+                        # print(loss_mse.item())
                         loss_list_dice.append(loss_dice)
                         loss_list_mse.append(loss_mse)
                         # print(loss_dice)
