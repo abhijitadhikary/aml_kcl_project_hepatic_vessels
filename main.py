@@ -112,6 +112,7 @@ class ModelConainer():
 
     def __init_model_params(self):
         self.params_model = {
+            'experiment_name': 'step_1',
             'model_name': 'deep_medic',
             'patch_size_normal': 25,
             'patch_size_low': 19,
@@ -132,7 +133,7 @@ class ModelConainer():
             'beta_2': 0.999,
             'momentum': 0.9,
             'use_amsgrad': True,
-            'learning_rate': 0.0001,
+            'learning_rate': 0.0002,
             'lr_scheduler_name': 'plateau',
             'patience_lr_scheduler': 3,
             'factor_lr_scheduler': 0.1,
@@ -140,18 +141,18 @@ class ModelConainer():
             'patience_early_stop': 5,
             'early_stop_patience_counter': 0,
             'min_epochs_to_train': 10,
-            'num_epochs': 50,
-            'min_early_stop': 10,
+            'num_epochs': 100,
+            'min_early_stop': 20,
             'save_every_epoch': True,
 
-            'save_condition': False,  # whether to save the model
+            'save_condition': True,  # whether to save the model
             'resume_condition': False,  # whether to resume training
 
             'resume_dir': '14-10-08__01-04-2022__deep_medic__dice__adam__lr_0.0001__ep_50',
             'resume_epoch': 'latest',
 
             'batch_size': 8,
-            'batch_size_inner': 1,
+            'batch_size_inner': 16,
             'train_percentage': 0.8,
             'num_workers': 8,
             'pin_memory': True,
@@ -199,8 +200,8 @@ class ModelConainer():
             'dice_n_mse': np.inf
         }
 
-        assert self.params_train['batch_size'] == 1 or self.params_train[
-            'batch_size_inner'] == 1, 'either must be 1, size issue'
+        # assert self.params_train['batch_size'] == 1 or self.params_train[
+        #     'batch_size_inner'] == 1, 'either must be 1, size issue'
 
     def __init_inference_params(self):
         self.run_mode = 'inference'
@@ -246,7 +247,8 @@ class ModelConainer():
             self.params_train['dirname_checkpoint'] = self.params_train['resume_dir'][:11]
             self.params_train['path_checkpoint_full'] = self.params_train['resume_dir']
         else:
-            self.params_train['dirname_checkpoint'] = f'{self.params_model["init_timestamp"]}__' \
+            self.params_train['dirname_checkpoint'] = f'{self.params_model["experiment_name"]}' \
+                                                      f'{self.params_model["init_timestamp"]}__' \
                                                       f'{self.params_model["model_name"]}__' \
                                                       f'{self.params_train["loss_name"]}__' \
                                                       f'{self.params_train["optimizer_name"]}__' \
@@ -319,7 +321,7 @@ class ModelConainer():
             self.dataloader_val = DataLoader(
                 self.dataset_val,
                 batch_size=self.params_train['batch_size'],
-                shuffle=True,
+                shuffle=False,
                 num_workers=self.params_train['num_workers'],
                 pin_memory=self.params_train['pin_memory'],
                 prefetch_factor=self.params_train['prefetch_factor'],
@@ -342,7 +344,11 @@ class ModelConainer():
             self.dataloader_inference = DataLoader(
                 self.dataset_inference,
                 batch_size=self.params_inference['batch_size'],
-                shuffle=True
+                shuffle=False,
+                num_workers=self.params_train['num_workers'],
+                pin_memory=self.params_train['pin_memory'],
+                prefetch_factor=self.params_train['prefetch_factor'],
+                persistent_workers=self.params_train['persistent_workers']
             )
 
     def __define_model(self):
@@ -548,7 +554,7 @@ class ModelConainer():
         loss_list_dice_n_mse = []
         loss_total, loss_dice, loss_mse, loss_ce, loss_dice_n_mse = np.Inf, np.Inf, np.Inf, np.Inf, np.Inf
 
-        for index_batch, batch in enumerate(dataloader):
+        for index_batch, batch in tqdm(enumerate(dataloader), leave=False, total=len(dataloader)):
             if run_mode == 'train':
                 self.model.train()
                 self.optimizer.zero_grad()
@@ -569,7 +575,10 @@ class ModelConainer():
 
             for index, current_low_up in enumerate(image_patch_low_up):
                 current_low = F.avg_pool3d(input=current_low_up, kernel_size=3, stride=None)
-                image_patch_low[index] = copy.deepcopy(current_low.detach())
+                if len(current_low.shape) == 4:
+                    image_patch_low[index] = copy.deepcopy(current_low.detach())
+                else:
+                    image_patch_low[index] = copy.deepcopy(current_low.detach()).squeeze(1)
 
             # forward pass
             label_patch_out_pred = self.model.forward((image_patch_normal, image_patch_low))
@@ -613,10 +622,9 @@ class ModelConainer():
                 loss_total.backward()
                 self.optimizer.step()
             sep = '\t' if run_mode == 'train' else '\t\t'
-            self.__print(f'\tBatch:\t[{index_batch + 1} / {len(dataloader)}]'
-                           f'\n\t\t{str(run_mode).upper()}{sep}-->\t\tLoss ({self.params_train["loss_name"]}):\t\t{loss_total.item():.5f}')
+            # self.__print(f'\tBatch:\t[{index_batch + 1} / {len(dataloader)}]'
+            #                f'\n\t\t{str(run_mode).upper()}{sep}-->\t\tLoss ({self.params_train["loss_name"]}):\t\t{loss_total.item():.5f}')
 
-            logging.debug('Debugger working here')
             # ###############################
             # loss_mse = self.criterion_mse(F.softmax(label_patch_out_pred.float(), dim=1),
             #                               label_patch_out_real_one_hot.float())
@@ -729,6 +737,7 @@ class ModelConainer():
                            f'Time:\t{duration:.2f} s'
                            f'\n\tTRAIN\t\t-->\t\tLoss Total:\t\t{self.loss_dict_train["total"][-1]:.5f}'
                            f'\n\tVAL\t\t\t-->\t\tLoss Total:\t\t{self.loss_dict_val["total"][-1]:.5f}'
+                            f'\t\tBest:\t{min(self.loss_dict_val["total"]):.5f}'
                            f'\n{"-" * 100}\n')
 
             self.__update_best_losses()
