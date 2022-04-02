@@ -50,6 +50,7 @@ class GeneralizedDiceLoss(nn.Module):
     '''
         Following the equation from https://arxiv.org/abs/1707.03237 page 3
     '''
+
     def __init__(self):
         super(GeneralizedDiceLoss, self).__init__()
 
@@ -106,6 +107,7 @@ class GeneralizedDiceLoss(nn.Module):
 
         return dice_loss
 
+
 class ModelConainer():
     def __init__(self):
         self.__init_model_params()
@@ -119,7 +121,7 @@ class ModelConainer():
             'patch_size_out': 9,
             'patch_low_factor': 3,
             'run_mode': None,
-            'dataset_variant': 'npy', # npy, nib, stik
+            'dataset_variant': 'npy',  # npy, nib, stik
             'create_numpy_dataset': False,
             'init_timestamp': datetime.now().strftime("%H-%M-%S__%d-%m-%Y")
         }
@@ -151,10 +153,10 @@ class ModelConainer():
             'resume_dir': '14-10-08__01-04-2022__deep_medic__dice__adam__lr_0.0001__ep_50',
             'resume_epoch': 'latest',
 
-            'batch_size': 8,
-            'batch_size_inner': 16,
+            'batch_size': 8, # 8
+            'batch_size_inner': 16, # 16
             'train_percentage': 0.8,
-            'num_workers': 8,
+            'num_workers': 8, # 8
             'pin_memory': True,
             'prefetch_factor': 16,
             'persistent_workers': True,
@@ -564,21 +566,31 @@ class ModelConainer():
             (image_patch_normal, image_patch_low_up, label_patch_out_real) = self.__put_to_device(self.device, batch)
 
             if self.params_train['batch_size_inner'] > 1:
-                image_patch_normal, image_patch_low_up, label_patch_out_real = image_patch_normal.squeeze(
-                    0), image_patch_low_up.squeeze(0), label_patch_out_real.squeeze(0)
+                if len(image_patch_normal.shape) == 6:
+                    batch_size_stacked = image_patch_normal.shape[0] * image_patch_normal.shape[1]
 
-            image_patch_low = torch.zeros((image_patch_low_up.shape[0],
-                                           image_patch_low_up.shape[1],
-                                           self.params_model['patch_size_low'],
-                                           self.params_model['patch_size_low'],
-                                           self.params_model['patch_size_low'])).to(self.device)
+                    image_patch_normal = image_patch_normal.reshape(batch_size_stacked, image_patch_normal.shape[2], image_patch_normal.shape[3], image_patch_normal.shape[4], image_patch_normal.shape[5])
+                    image_patch_low_up = image_patch_low_up.reshape(batch_size_stacked, image_patch_low_up.shape[2], image_patch_low_up.shape[3], image_patch_low_up.shape[4], image_patch_low_up.shape[5])
+                    label_patch_out_real = label_patch_out_real.reshape(batch_size_stacked, label_patch_out_real.shape[2], label_patch_out_real.shape[3], label_patch_out_real.shape[4], label_patch_out_real.shape[5])
 
-            for index, current_low_up in enumerate(image_patch_low_up):
-                current_low = F.avg_pool3d(input=current_low_up, kernel_size=3, stride=None)
-                if len(current_low.shape) == 4:
-                    image_patch_low[index] = copy.deepcopy(current_low.detach())
+                    image_patch_low = torch.zeros((image_patch_low_up.shape[0],
+                                                   self.params_model['patch_size_low'],
+                                                   self.params_model['patch_size_low'],
+                                                   self.params_model['patch_size_low'])).to(self.device)
+
                 else:
-                    image_patch_low[index] = copy.deepcopy(current_low.detach()).squeeze(1)
+                    image_patch_normal, image_patch_low_up, label_patch_out_real = image_patch_normal.squeeze(
+                        0), image_patch_low_up.squeeze(0), label_patch_out_real.squeeze(0)
+
+                image_patch_low = torch.zeros((image_patch_low_up.shape[0],
+                                               image_patch_low_up.shape[1],
+                                               self.params_model['patch_size_low'],
+                                               self.params_model['patch_size_low'],
+                                               self.params_model['patch_size_low'])).to(self.device)
+
+                for index, current_low_up in enumerate(image_patch_low_up):
+                    current_low = F.avg_pool3d(input=current_low_up, kernel_size=3, stride=None)
+                    image_patch_low[index] = copy.deepcopy(current_low.detach())
 
             # forward pass
             label_patch_out_pred = self.model.forward((image_patch_normal, image_patch_low))
@@ -733,12 +745,12 @@ class ModelConainer():
             duration = time.time() - time_start
 
             self.__print(f'\n{"-" * 100}'
-                           f'\nEpoch:\t[{index_epoch + 1} / {self.end_epoch}]\t\t'
-                           f'Time:\t{duration:.2f} s'
-                           f'\n\tTRAIN\t\t-->\t\tLoss Total:\t\t{self.loss_dict_train["total"][-1]:.5f}'
-                           f'\n\tVAL\t\t\t-->\t\tLoss Total:\t\t{self.loss_dict_val["total"][-1]:.5f}'
-                            f'\t\tBest:\t{min(self.loss_dict_val["total"]):.5f}'
-                           f'\n{"-" * 100}\n')
+                         f'\nEpoch:\t[{index_epoch + 1} / {self.end_epoch}]\t\t'
+                         f'Time:\t{duration:.2f} s'
+                         f'\n\tTRAIN\t\t-->\t\tLoss Total:\t\t{self.loss_dict_train["total"][-1]:.5f}'
+                         f'\n\tVAL\t\t\t-->\t\tLoss Total:\t\t{self.loss_dict_val["total"][-1]:.5f}'
+                         f'\t\tBest:\t{min(self.loss_dict_val["total"]):.5f}'
+                         f'\n{"-" * 100}\n')
 
             self.__update_best_losses()
             self.__save_model()
@@ -943,7 +955,7 @@ class ModelConainer():
                         loss_dice = self.criterion_dice(F.softmax(label_patch_out_pred.float(), dim=1),
                                                         label_patch_out_real_one_hot.float())
                         loss_mse = self.criterion_mse(F.softmax(label_patch_out_pred.float(), dim=1),
-                                           label_patch_out_real_one_hot.float())
+                                                      label_patch_out_real_one_hot.float())
                         loss_list_dice.append(loss_dice)
                         loss_list_mse.append(loss_mse)
                         # print(loss_dice)
@@ -975,13 +987,12 @@ class ModelConainer():
 
         return labels_pred_whole_image, loss_dice, loss_mse
 
-if __name__=='__main__':
+
+if __name__ == '__main__':
     torch.multiprocessing.freeze_support()
     model_container = ModelConainer()
     model_container.train()
     # model_container.inference()
-
-
 
 # def gdl(im_pred, im_real):
 #     weights = torch.zeros(3)
