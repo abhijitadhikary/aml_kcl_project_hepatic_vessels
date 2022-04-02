@@ -55,29 +55,11 @@ class GeneralizedDiceLoss(nn.Module):
         super(GeneralizedDiceLoss, self).__init__()
 
     def forward(self, im_pred, im_real):
-        # weights = torch.zeros(3)
-        # for index in range(3):
-        #     count = torch.tensor(torch.sum(torch.where(im_real == index, 1, 0)), dtype=torch.double, requires_grad=True)
-        #     # if none of the voxels are of the current category, set weight to 1
-        #     if count == 0:
-        #         weights[index] = copy.deepcopy(torch.tensor(1, dtype=torch.double, requires_grad=True))
-        #     else:
-        #         weights[index] = 1 / count ** 2
-        #
-        # numerator = torch.zeros(3, dtype=torch.double, requires_grad=True)
-        # denominator = torch.zeros(3, dtype=torch.double, requires_grad=True)
-        #
-        # for index in range(3):
-        #     r_l_n = torch.where(im_real == index, 1, 0)
-        #     p_l_n = torch.where(im_pred == index, 1, 0)
-        #
-        #     # numerator
-        #     numerator[index] = weights[index] * torch.sum(r_l_n * p_l_n)
-        #
-        #     current_denominator = weights[index] * (torch.sum(r_l_n) + torch.sum(p_l_n))
-        #     denominator[index] = current_denominator
-        #
-        # dice_loss = 1 - (2 * torch.sum(numerator) / torch.sum(denominator))
+        if len(im_pred.shape) == 4:
+            im_pred = im_pred.unsqueeze(0)
+
+        if len(im_real.shape) == 4:
+            im_real = im_real.unsqueeze(0)
 
         im_real = im_real.permute((1, 0, 2, 3, 4))
         im_pred = im_pred.permute((1, 0, 2, 3, 4))
@@ -153,10 +135,10 @@ class ModelConainer():
             'resume_dir': '14-10-08__01-04-2022__deep_medic__dice__adam__lr_0.0001__ep_50',
             'resume_epoch': 'latest',
 
-            'batch_size': 8, # 8
-            'batch_size_inner': 16, # 16
+            'batch_size': 8,  # 8
+            'batch_size_inner': 16,  # 16
             'train_percentage': 0.8,
-            'num_workers': 8, # 8
+            'num_workers': 8,  # 8
             'pin_memory': True,
             'prefetch_factor': 16,
             'persistent_workers': True,
@@ -211,7 +193,7 @@ class ModelConainer():
             'loss_name': 'dice',
             'batch_size': 1,
             'train_percentage': 0.8,
-            'num_workers': 1, # 8
+            'num_workers': 1,  # 8
             'pin_memory': True,
             'prefetch_factor': 2,
             'persistent_workers': True,
@@ -572,9 +554,19 @@ class ModelConainer():
                 if len(image_patch_normal.shape) == 6:
                     batch_size_stacked = image_patch_normal.shape[0] * image_patch_normal.shape[1]
 
-                    image_patch_normal = image_patch_normal.reshape(batch_size_stacked, image_patch_normal.shape[2], image_patch_normal.shape[3], image_patch_normal.shape[4], image_patch_normal.shape[5])
-                    image_patch_low_up = image_patch_low_up.reshape(batch_size_stacked, image_patch_low_up.shape[2], image_patch_low_up.shape[3], image_patch_low_up.shape[4], image_patch_low_up.shape[5])
-                    label_patch_out_real = label_patch_out_real.reshape(batch_size_stacked, label_patch_out_real.shape[2], label_patch_out_real.shape[3], label_patch_out_real.shape[4], label_patch_out_real.shape[5])
+                    image_patch_normal = image_patch_normal.reshape(batch_size_stacked, image_patch_normal.shape[2],
+                                                                    image_patch_normal.shape[3],
+                                                                    image_patch_normal.shape[4],
+                                                                    image_patch_normal.shape[5])
+                    image_patch_low_up = image_patch_low_up.reshape(batch_size_stacked, image_patch_low_up.shape[2],
+                                                                    image_patch_low_up.shape[3],
+                                                                    image_patch_low_up.shape[4],
+                                                                    image_patch_low_up.shape[5])
+                    label_patch_out_real = label_patch_out_real.reshape(batch_size_stacked,
+                                                                        label_patch_out_real.shape[2],
+                                                                        label_patch_out_real.shape[3],
+                                                                        label_patch_out_real.shape[4],
+                                                                        label_patch_out_real.shape[5])
 
                     image_patch_low = torch.zeros((image_patch_low_up.shape[0],
                                                    self.params_model['patch_size_low'],
@@ -785,15 +777,40 @@ class ModelConainer():
         self.__print(f'{"*" * 100}')
 
         for index_batch, batch in enumerate(self.dataloader_inference):
-            (images, labels) = self.__put_to_device(self.device, batch)
-
+            (images, labels_real) = self.__put_to_device(self.device, batch)
 
             labels_pred, loss_dice, loss_mse = self.__stride_depth_and_inference(
                 images_real=images,
-                labels_real=labels
+                labels_real=labels_real
             )
 
-            self.__print(f'{index_batch}\tLoss DICE:\t{loss_dice:.5f}\tLoss MSE:\t{loss_mse:.5f}')
+            self.__print(f'{index_batch + 1}\tLoss DICE:\t{loss_dice:.5f}\tLoss MSE:\t{loss_mse:.5f}')
+
+            # im_real_one_hot = torch.zeros((labels_real.shape[0],
+            #                                3,
+            #                                labels_real.shape[1],
+            #                                labels_real.shape[2],
+            #                                labels_real.shape[3])).to(labels_real.device)
+            #
+            # im_real_one_hot[:, 0] = torch.where(labels_real == 0, 1, 0)
+            # im_real_one_hot[:, 1] = torch.where(labels_real == 1, 1, 0)
+            # im_real_one_hot[:, 2] = torch.where(labels_real == 2, 1, 0)
+            #
+            # im_pred_one_hot = torch.zeros((labels_pred.shape[0],
+            #                                3,
+            #                                labels_pred.shape[1],
+            #                                labels_pred.shape[2],
+            #                                labels_pred.shape[3])).to(labels_pred.device)
+            #
+            # im_pred_one_hot[:, 0] = torch.where(labels_pred == 0, 1, 0)
+            # im_pred_one_hot[:, 1] = torch.where(labels_pred == 1, 1, 0)
+            # im_pred_one_hot[:, 2] = torch.where(labels_pred == 2, 1, 0)
+
+            labels_real, labels_pred = labels_real.cpu().detach().numpy(), labels_pred.cpu().detach().numpy()
+
+            predictions_path = os.path.join('predictions', 'abhijit')
+            os.makedirs(predictions_path, exist_ok=True)
+            np.save(os.path.join(predictions_path, f'prediction_{index_batch + 1}.pkl'), labels_pred, allow_pickle=True)
 
     def __stride_depth_and_inference(self, images_real, labels_real):
         self.model.eval()
@@ -913,7 +930,8 @@ class ModelConainer():
                                                d_start_out: d_end_out
                                                ]
 
-                        if not (label_patch_out_real.shape[1] * label_patch_out_real.shape[2] * label_patch_out_real.shape[3] > 0):
+                        if not (label_patch_out_real.shape[1] * label_patch_out_real.shape[2] *
+                                label_patch_out_real.shape[3] > 0):
                             continue
 
                         # pad uneven images
