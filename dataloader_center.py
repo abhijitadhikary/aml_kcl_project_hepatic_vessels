@@ -16,6 +16,7 @@ import torch.optim as optim
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 import torchvision.transforms as transforms
+import SimpleITK as sitk
 import torch.nn.functional as F
 
 
@@ -24,7 +25,7 @@ class ToTorchTensor():
         Transforms a numpy ndarray to a torch tensor of the supplied datatype
     '''
 
-    def __call__(self, input, datatype=torch.float32, requires_grad=True):
+    def __call__(self, input, datatype=torch.float32, requires_grad=False):
         return torch.tensor(input, dtype=datatype, requires_grad=requires_grad)
 
 
@@ -73,9 +74,14 @@ class DatasetHepatic(Dataset):
             image = self.read_file_nib(self.filenames_image_nib[index])
             label = self.read_file_nib(self.filenames_label_nib[index])
         elif self.dataset_variant == 'npy':
-
             image = self.read_file_npy(self.filenames_image_npy[index])
             label = self.read_file_npy(self.filenames_label_npy[index])
+        elif self.dataset_variant == 'stik':
+            image = sitk.GetArrayViewFromImage(sitk.ReadImage(self.filenames_image_nib[index]))
+            label = sitk.GetArrayViewFromImage(sitk.ReadImage(self.filenames_label_nib[index]))
+
+            image = np.moveaxis(image, 0, -1)
+            label = np.moveaxis(label, 0, -1)
 
         if self.run_mode in ['train', 'val']:
             '''
@@ -94,7 +100,7 @@ class DatasetHepatic(Dataset):
 
             if self.batch_size_inner > 1:
                 image_patch_normal_stack = torch.zeros((self.batch_size_inner, self.patch_size_normal, self.patch_size_normal, self.patch_size_normal), dtype=torch.float32)
-                image_patch_low_stack = torch.zeros((self.batch_size_inner, self.patch_size_low, self.patch_size_low, self.patch_size_low), dtype=torch.float32)
+                image_patch_low_up_stack = torch.zeros((self.batch_size_inner, self.patch_size_low_up, self.patch_size_low_up, self.patch_size_low_up), dtype=torch.float32)
                 label_patch_out_stack = torch.zeros((self.batch_size_inner, self.patch_size_out, self.patch_size_out, self.patch_size_out), dtype=torch.int64)
 
                 for index_inner in range(self.batch_size_inner):
@@ -111,19 +117,19 @@ class DatasetHepatic(Dataset):
                     image_patch_low_up = self.transform(image_patch_low_up)
                     # image_patch_out = self.transform(image_patch_out)
 
-                    # resize (downsample) the low resolution images and labels
-                    image_patch_low = F.avg_pool3d(input=image_patch_low_up.unsqueeze(0), kernel_size=3, stride=None).squeeze(0)
+                    # # resize (downsample) the low resolution images and labels
+                    # image_patch_low = F.avg_pool3d(input=image_patch_low_up.unsqueeze(0), kernel_size=3, stride=None).squeeze(0)
 
                     # transform the labels to tensors
-                    # label_patch_normal = torch.tensor(label_patch_normal, dtype=torch.int64, requires_grad=False)
-                    # label_patch_low_up = torch.tensor(label_patch_low_up, dtype=torch.int64, requires_grad=False)
-                    label_patch_out = torch.tensor(label_patch_out, dtype=torch.int64, requires_grad=False)
+                    # label_patch_normal = torch.tensor(label_patch_normal, dtype=torch.int64)
+                    # label_patch_low_up = torch.tensor(label_patch_low_up, dtype=torch.int64)
+                    label_patch_out = torch.tensor(label_patch_out, dtype=torch.int64)
 
                     image_patch_normal_stack[index_inner] = image_patch_normal.unsqueeze(0)
-                    image_patch_low_stack[index_inner] = image_patch_low.unsqueeze(0)
+                    image_patch_low_up_stack[index_inner] = image_patch_low_up.unsqueeze(0)
                     label_patch_out_stack[index_inner] = label_patch_out.unsqueeze(0)
 
-                return image_patch_normal_stack.unsqueeze(1), image_patch_low_stack.unsqueeze(1), label_patch_out_stack.unsqueeze(1)
+                return image_patch_normal_stack.unsqueeze(1), image_patch_low_up_stack.unsqueeze(1), label_patch_out_stack.unsqueeze(1)
             else:
                 # extract the three different patches of labels
                 label_patch_normal, label_patch_low_up, label_patch_out = self.get_random_patch(label)
@@ -139,15 +145,14 @@ class DatasetHepatic(Dataset):
                 # image_patch_out = self.transform(image_patch_out)
 
                 # resize (downsample) the low resolution images and labels
-                image_patch_low = F.avg_pool3d(input=image_patch_low_up.unsqueeze(0), kernel_size=3,
-                                               stride=None).squeeze(0)
+                # image_patch_low = F.avg_pool3d(input=image_patch_low_up.unsqueeze(0), kernel_size=3, stride=None).squeeze(0)
 
                 # transform the labels to tensors
-                # label_patch_normal = torch.tensor(label_patch_normal, dtype=torch.int64, requires_grad=False)
-                # label_patch_low_up = torch.tensor(label_patch_low_up, dtype=torch.int64, requires_grad=False)
-                label_patch_out = torch.tensor(label_patch_out, dtype=torch.int64, requires_grad=False)
+                # label_patch_normal = torch.tensor(label_patch_normal, dtype=torch.int64)
+                # label_patch_low_up = torch.tensor(label_patch_low_up, dtype=torch.int64)
+                label_patch_out = torch.tensor(label_patch_out, dtype=torch.int64)
 
-                return image_patch_normal.unsqueeze(0), image_patch_low.unsqueeze(0), label_patch_out.unsqueeze(0)
+                return image_patch_normal.unsqueeze(0), image_patch_low_up.unsqueeze(0), label_patch_out.unsqueeze(0)
 
         elif self.run_mode == 'inference':
             # TODO fix uneven dimensions, otherwise run with batch size = 1

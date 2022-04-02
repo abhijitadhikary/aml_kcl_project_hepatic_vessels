@@ -118,7 +118,7 @@ class ModelConainer():
             'patch_size_out': 9,
             'patch_low_factor': 3,
             'run_mode': None,
-            'dataset_variant': 'npy',
+            'dataset_variant': 'npy', # npy, nib, stik
             'create_numpy_dataset': False,
             'init_timestamp': datetime.now().strftime("%H-%M-%S__%d-%m-%Y")
         }
@@ -144,16 +144,21 @@ class ModelConainer():
             'min_early_stop': 10,
             'save_every_epoch': True,
 
-            'save_condition': True,  # whether to save the model
+            'save_condition': False,  # whether to save the model
             'resume_condition': False,  # whether to resume training
 
-            'resume_dir': '10-58-57__29-03-2022__deep_medic__ce__adam__lr_0.0001__ep_50',
-            'resume_epoch': 2,
+            'resume_dir': '14-10-08__01-04-2022__deep_medic__dice__adam__lr_0.0001__ep_50',
+            'resume_epoch': 'latest',
 
-            'batch_size': 1,
-            'batch_size_inner': 16,
+            'batch_size': 8,
+            'batch_size_inner': 1,
             'train_percentage': 0.8,
-            'path_checkpoint': 'checkpoints',
+            'num_workers': 8,
+            'pin_memory': True,
+            'prefetch_factor': 16,
+            'persistent_workers': True,
+
+            'path_checkpoint': os.path.join('.', 'checkpoints'),
             'path_checkpoint_full': '',
             'dirname_checkpoint': '',
             'filename_params': 'params.json',
@@ -304,13 +309,21 @@ class ModelConainer():
             self.dataloader_train = DataLoader(
                 self.dataset_train,
                 batch_size=self.params_train['batch_size'],
-                shuffle=True
+                shuffle=True,
+                num_workers=self.params_train['num_workers'],
+                pin_memory=self.params_train['pin_memory'],
+                prefetch_factor=self.params_train['prefetch_factor'],
+                persistent_workers=self.params_train['persistent_workers']
             )
 
             self.dataloader_val = DataLoader(
                 self.dataset_val,
                 batch_size=self.params_train['batch_size'],
-                shuffle=True
+                shuffle=True,
+                num_workers=self.params_train['num_workers'],
+                pin_memory=self.params_train['pin_memory'],
+                prefetch_factor=self.params_train['prefetch_factor'],
+                persistent_workers=self.params_train['persistent_workers']
             )
 
         elif run_mode == 'inference':
@@ -505,17 +518,18 @@ class ModelConainer():
         if self.index_epoch > self.params_train['min_epochs_to_train']:
 
             # if the latest loss is lower than the best, continue training,
-            # otherwise check the last x losses
-            if self.loss_best_val['total'][-1] < min(self.loss_best_val['total']):
+            # otherwise check the last x losses loss_dict_val
+            # if self.loss_best_val['total'][-1] < min(self.loss_best_val['total']):
+            if self.loss_dict_val['total'][-1] < min(self.loss_dict_val['total']):
                 self.break_training_condition = False
             else:
-                index_start = self.loss_best_val['total'] - 1
-                index_stop = self.loss_best_val['total'] - 1 - self.params_train['patience_early_stop']
+                index_start = len(self.loss_dict_val['total']) - 1
+                index_stop = len(self.loss_dict_val['total']) - 1 - self.params_train['patience_early_stop']
 
                 # if any of the last x losses are greater than the best loss, increase counter
                 counter = 0
                 for index in range(index_start, index_stop, -1):
-                    if self.loss_best_val['total'][index] > min(self.loss_best_val['total']):
+                    if self.loss_dict_val['total'][index] > min(self.loss_dict_val['total']):
                         counter += 1
 
                 # if counter equals the patience, break training
@@ -541,11 +555,21 @@ class ModelConainer():
             else:
                 self.model.eval()
 
-            (image_patch_normal, image_patch_low, label_patch_out_real) = self.__put_to_device(self.device, batch)
+            (image_patch_normal, image_patch_low_up, label_patch_out_real) = self.__put_to_device(self.device, batch)
 
             if self.params_train['batch_size_inner'] > 1:
-                image_patch_normal, image_patch_low, label_patch_out_real = image_patch_normal.squeeze(
-                    0), image_patch_low.squeeze(0), label_patch_out_real.squeeze(0)
+                image_patch_normal, image_patch_low_up, label_patch_out_real = image_patch_normal.squeeze(
+                    0), image_patch_low_up.squeeze(0), label_patch_out_real.squeeze(0)
+
+            image_patch_low = torch.zeros((image_patch_low_up.shape[0],
+                                           image_patch_low_up.shape[1],
+                                           self.params_model['patch_size_low'],
+                                           self.params_model['patch_size_low'],
+                                           self.params_model['patch_size_low'])).to(self.device)
+
+            for index, current_low_up in enumerate(image_patch_low_up):
+                current_low = F.avg_pool3d(input=current_low_up, kernel_size=3, stride=None)
+                image_patch_low[index] = copy.deepcopy(current_low.detach())
 
             # forward pass
             label_patch_out_pred = self.model.forward((image_patch_normal, image_patch_low))
@@ -942,10 +966,11 @@ class ModelConainer():
 
         return labels_pred_whole_image, loss_dice, loss_mse
 
-
-model_container = ModelConainer()
-model_container.train()
-# model_container.inference()
+if __name__=='__main__':
+    torch.multiprocessing.freeze_support()
+    model_container = ModelConainer()
+    model_container.train()
+    # model_container.inference()
 
 
 
