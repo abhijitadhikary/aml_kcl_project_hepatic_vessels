@@ -210,12 +210,15 @@ class ModelConainer():
         self.params_inference = {
             'loss_name': 'dice',
             'batch_size': 1,
-            'batch_size_inner': 16,  # either batch_size or batch_size_inner MUST be set to 1
             'train_percentage': 0.8,
+            'num_workers': 1, # 8
+            'pin_memory': True,
+            'prefetch_factor': 2,
+            'persistent_workers': True,
 
-            'resume_dir': '10-58-57__29-03-2022__deep_medic__ce__adam__lr_0.0001__ep_50',
-            'resume_epoch': 2,
-            'path_checkpoint': 'checkpoints',
+            'resume_dir': 'step_109-37-19__02-04-2022__deep_medic__dice__adam__lr_0.0002__ep_100',
+            'resume_epoch': 'best',
+            'path_checkpoint': os.path.join('.', 'checkpoints'),
             'path_checkpoint_full': '',
             'dirname_checkpoint': '',
         }
@@ -347,10 +350,10 @@ class ModelConainer():
                 self.dataset_inference,
                 batch_size=self.params_inference['batch_size'],
                 shuffle=False,
-                num_workers=self.params_train['num_workers'],
-                pin_memory=self.params_train['pin_memory'],
-                prefetch_factor=self.params_train['prefetch_factor'],
-                persistent_workers=self.params_train['persistent_workers']
+                num_workers=self.params_inference['num_workers'],
+                pin_memory=self.params_inference['pin_memory'],
+                prefetch_factor=self.params_inference['prefetch_factor'],
+                persistent_workers=self.params_inference['persistent_workers']
             )
 
     def __define_model(self):
@@ -773,8 +776,12 @@ class ModelConainer():
         self.__print(f'{"*" * 100}')
         self.__print('\t\tInference starting with params:')
         self.__print(f'{"*" * 100}')
-        self.__print(f'params_model:\n{self.params_model}')
-        self.__print(f'params_inference:\n{self.params_inference}')
+        params_dict = {
+            'params_model': self.params_model,
+            'params_inference': self.params_inference
+        }
+        params_dict = json.dumps(params_dict, indent=4, sort_keys=False)
+        self.__print(f'{params_dict}')
         self.__print(f'{"*" * 100}')
 
         for index_batch, batch in enumerate(self.dataloader_inference):
@@ -785,7 +792,7 @@ class ModelConainer():
                 labels_real=labels
             )
 
-            self.__print(f'{index_batch}\tLoss DICE:\t{loss_dice}\tLoss MSE:\t{loss_mse}')
+            self.__print(f'{index_batch}\tLoss DICE:\t{loss_dice:.5f}\tLoss MSE:\t{loss_mse:.5f}')
 
     def __stride_depth_and_inference(self, images_real, labels_real):
 
@@ -956,6 +963,7 @@ class ModelConainer():
                                                         label_patch_out_real_one_hot.float())
                         loss_mse = self.criterion_mse(F.softmax(label_patch_out_pred.float(), dim=1),
                                                       label_patch_out_real_one_hot.float())
+                        print(loss_mse.item())
                         loss_list_dice.append(loss_dice)
                         loss_list_mse.append(loss_mse)
                         # print(loss_dice)
@@ -991,66 +999,5 @@ class ModelConainer():
 if __name__ == '__main__':
     torch.multiprocessing.freeze_support()
     model_container = ModelConainer()
-    model_container.train()
-    # model_container.inference()
-
-# def gdl(im_pred, im_real):
-#     weights = torch.zeros(3)
-#     for index in range(3):
-#         count = torch.sum(torch.where(im_real == index, 1, 0))
-#         # if none of the voxels are of the current category, set weight to 1
-#         if count == 0:
-#             weights[index] = copy.deepcopy(torch.tensor(1, dtype=torch.double))
-#         else:
-#             weights[index] = 1 / count ** 2
-#
-#     numerator = torch.zeros(3, dtype=torch.double)
-#     denominator = torch.zeros(3, dtype=torch.double)
-#
-#     for index in range(3):
-#         r_l_n = torch.where(im_real == index, 1, 0)
-#         p_l_n = torch.where(im_pred == index, 1, 0)
-#
-#         # numerator
-#         numerator[index] = weights[index] * torch.sum(r_l_n * p_l_n)
-#
-#         current_denominator = weights[index] * (torch.sum(r_l_n) + torch.sum(p_l_n))
-#         denominator[index] = current_denominator
-#
-#     dice_loss_ = 1 - (2 * torch.sum(numerator) / torch.sum(denominator))
-#
-#     im_real = im_real.permute((1, 0, 2, 3, 4))
-#     im_pred = im_pred.permute((1, 0, 2, 3, 4))
-#
-#     eps = 1e-12
-#     sum_1 = torch.sum(im_real[0])
-#     sum_2 = torch.sum(im_real[1])
-#     sum_3 = torch.sum(im_real[2])
-#
-#     weight_1 = 1 / (sum_1**2 + eps) if sum_1 > 0 else 1
-#     weight_2 = 1 / (sum_2**2 + eps) if sum_2 > 0 else 1
-#     weight_3 = 1 / (sum_3**2 + eps) if sum_3 > 0 else 1
-#
-#     numerator_1 = torch.sum(im_real[0] * im_pred[0]) * weight_1
-#     numerator_2 = torch.sum(im_real[1] * im_pred[1]) * weight_2
-#     numerator_3 = torch.sum(im_real[2] * im_pred[2]) * weight_3
-#
-#     numerator = numerator_1 + numerator_2 + numerator_3
-#
-#     denominator_1 = (torch.sum(im_real[0]) + torch.sum(im_pred[0])) * weight_1
-#     denominator_2 = (torch.sum(im_real[1]) + torch.sum(im_pred[1])) * weight_2
-#     denominator_3 = (torch.sum(im_real[2]) + torch.sum(im_pred[2])) * weight_3
-#
-#     denominator = denominator_1 + denominator_2 + denominator_3
-#
-#     dice_loss = ((2 * numerator) / (denominator + eps))
-#
-#
-#
-#
-#
-#     return dice_loss
-#
-# real = torch.ones((10, 3, 512, 512, 50))
-# pred = torch.ones((10, 3, 512, 512, 50))
-# print(gdl(pred, real).item())
+    # model_container.train()
+    model_container.inference()
