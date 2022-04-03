@@ -27,8 +27,8 @@ import torch.nn.functional as F
 # from dataloader_top_left import DatasetHepatic
 from dataloader_center import DatasetHepatic
 
-# from network_resnet_deepmedic import DeepMedic
-from network_deepmedic import DeepMedic
+from network_resnet_deepmedic import DeepMedic
+# from network_deepmedic import DeepMedic
 
 from losses import GeneralizedDiceLoss
 
@@ -198,7 +198,7 @@ class ModelConainer():
             'prefetch_factor': 2,
             'persistent_workers': True,
 
-            'resume_dir': 'step_109-37-19__02-04-2022__deep_medic__dice__adam__lr_0.0002__ep_100',
+            'resume_dir': 'step_1__15-17-04__02-04-2022__deep_medic__dice__adam__lr_0.0002__ep_100',
             'resume_epoch': 'best',
             'path_checkpoint': os.path.join('.', 'checkpoints'),
             'path_checkpoint_full': '',
@@ -234,7 +234,7 @@ class ModelConainer():
             self.params_train['dirname_checkpoint'] = self.params_train['resume_dir'][:11]
             self.params_train['path_checkpoint_full'] = self.params_train['resume_dir']
         else:
-            self.params_train['dirname_checkpoint'] = f'{self.params_model["experiment_name"]}' \
+            self.params_train['dirname_checkpoint'] = f'{self.params_model["experiment_name"]}__' \
                                                       f'{self.params_model["init_timestamp"]}__' \
                                                       f'{self.params_model["model_name"]}__' \
                                                       f'{self.params_train["loss_name"]}__' \
