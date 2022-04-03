@@ -450,7 +450,7 @@ class ModelConainer():
             save_path = os.path.join(self.params_train['path_checkpoint_full'], f'latest.pth')
             torch.save(save_dict, save_path)
 
-            if self.found_best_loss_flag:
+            if self.loss_dict_val['total'][-1] < min(self.loss_dict_val['total']):
                 save_path = os.path.join(self.params_train['path_checkpoint_full'], f'best.pth')
                 torch.save(save_dict, save_path)
                 self.__print(f'{"*" * 10}\tNew best model saved at:\t{self.index_epoch + 1}\t{"*" * 10}')
