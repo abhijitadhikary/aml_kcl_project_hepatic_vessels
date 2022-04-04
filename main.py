@@ -424,9 +424,9 @@ class DatasetHepatic(Dataset):
             self.filenames_label_nib = [current_sample['label'] for current_sample in data_meta['training']][
                                        :num_samples]
 
-            self.filenames_image_npy = [os.path.join('ImagesTrNP', f'{filename[11:-7]}.npy') for filename in
+            self.filenames_image_npy = [os.path.join('.', 'imagesTrNP', f'{filename[11:-7]}.npy') for filename in
                                         self.filenames_image_nib]
-            self.filenames_label_npy = [os.path.join('labelsTrNP', f'{filename[11:-7]}.npy') for filename in
+            self.filenames_label_npy = [os.path.join('.', 'labelsTrNP', f'{filename[11:-7]}.npy') for filename in
                                         self.filenames_label_nib]
             self.num_samples = num_samples
         else:
@@ -437,9 +437,9 @@ class DatasetHepatic(Dataset):
             self.filenames_label_nib = [current_sample['label'] for current_sample in data_meta['training']][
                                        num_train:]
 
-            self.filenames_image_npy = [os.path.join('ImagesTrNP', f'{filename[11:-7]}.npy') for filename in
+            self.filenames_image_npy = [os.path.join('.', 'imagesTrNP', f'{filename[11:-7]}.npy') for filename in
                                         self.filenames_image_nib]
-            self.filenames_label_npy = [os.path.join('labelsTrNP', f'{filename[11:-7]}.npy') for filename in
+            self.filenames_label_npy = [os.path.join('.', 'labelsTrNP', f'{filename[11:-7]}.npy') for filename in
                                         self.filenames_label_nib]
             # self.num_samples = int(np.ceil((1 - self.train_percentage) * num_samples))
             self.num_samples = len(self.filenames_image_nib)
