@@ -20,13 +20,24 @@ import SimpleITK as sitk
 import torch.nn.functional as F
 
 
-class ToTorchTensor():
+class ToTorchTensor:
     '''
         Transforms a numpy ndarray to a torch tensor of the supplied datatype
     '''
 
     def __call__(self, input, datatype=torch.float32, requires_grad=False):
         return torch.tensor(input, dtype=datatype, requires_grad=requires_grad)
+
+
+class ZeroOneNormalize:
+    '''
+        Transforms a numpy ndarray to a torch tensor of the supplied datatype
+    '''
+
+    def __call__(self, input):
+        input = input - torch.min(input)
+        input = input / torch.max(input)
+        return input
 
 
 class DatasetHepatic(Dataset):
@@ -67,7 +78,14 @@ class DatasetHepatic(Dataset):
         self.fetch_filenames()
         self.create_numpy_dataset()
 
-        self.transform = transform if not transform is None else transforms.Compose([ToTorchTensor()])
+        if transform is None:
+            self.transform = transforms.Compose([
+                ToTorchTensor(),
+                ZeroOneNormalize()
+            ])
+        else:
+            self.transform = transform
+        # self.transform = transform if not transform is None else transforms.Compose([ToTorchTensor()])
 
     def __getitem__(self, index):
         if self.dataset_variant == 'nib':
@@ -138,8 +156,7 @@ class DatasetHepatic(Dataset):
                     image_patch_low_up_stack[index_inner] = image_patch_low_up.unsqueeze(0)
                     label_patch_out_stack[index_inner] = label_patch_out.unsqueeze(0)
 
-                return image_patch_normal_stack.unsqueeze(1), image_patch_low_up_stack.unsqueeze(
-                    1), label_patch_out_stack.unsqueeze(1)
+                return image_patch_normal_stack.unsqueeze(1), image_patch_low_up_stack.unsqueeze(1), label_patch_out_stack.unsqueeze(1)
             else:
                 # extract the three different patches of labels
                 label_patch_normal, label_patch_low_up, label_patch_out = self.get_random_patch(label)
@@ -166,6 +183,7 @@ class DatasetHepatic(Dataset):
 
         elif self.run_mode == 'inference':
             # TODO fix uneven dimensions, otherwise run with batch size = 1
+            image = self.transform(image)
             return image, label, index_filename
 
     def __len__(self):
@@ -420,5 +438,3 @@ class DatasetHepatic(Dataset):
             self.filenames_image_nib = [current_sample for current_sample in data_meta['test']]
             if len(self.filenames_image_nib) == 0:
                 raise Exception(f'Error reading {self.run_mode} images')
-
-
