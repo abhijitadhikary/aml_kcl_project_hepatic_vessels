@@ -83,6 +83,9 @@ class DatasetHepatic(Dataset):
             image = np.moveaxis(image, 0, -1)
             label = np.moveaxis(label, 0, -1)
 
+        # index of the original filenames as in the dataset folders
+        index_filename = self.filenames_image_npy[index][25:28]
+
         if self.run_mode in ['train', 'val']:
             '''
                 # normal = 25
@@ -99,9 +102,15 @@ class DatasetHepatic(Dataset):
             # label = label_temp
 
             if self.batch_size_inner > 1:
-                image_patch_normal_stack = torch.zeros((self.batch_size_inner, self.patch_size_normal, self.patch_size_normal, self.patch_size_normal), dtype=torch.float32)
-                image_patch_low_up_stack = torch.zeros((self.batch_size_inner, self.patch_size_low_up, self.patch_size_low_up, self.patch_size_low_up), dtype=torch.float32)
-                label_patch_out_stack = torch.zeros((self.batch_size_inner, self.patch_size_out, self.patch_size_out, self.patch_size_out), dtype=torch.int64)
+                image_patch_normal_stack = torch.zeros(
+                    (self.batch_size_inner, self.patch_size_normal, self.patch_size_normal, self.patch_size_normal),
+                    dtype=torch.float32)
+                image_patch_low_up_stack = torch.zeros(
+                    (self.batch_size_inner, self.patch_size_low_up, self.patch_size_low_up, self.patch_size_low_up),
+                    dtype=torch.float32)
+                label_patch_out_stack = torch.zeros(
+                    (self.batch_size_inner, self.patch_size_out, self.patch_size_out, self.patch_size_out),
+                    dtype=torch.int64)
 
                 for index_inner in range(self.batch_size_inner):
                     # extract the three different patches of labels
@@ -129,7 +138,8 @@ class DatasetHepatic(Dataset):
                     image_patch_low_up_stack[index_inner] = image_patch_low_up.unsqueeze(0)
                     label_patch_out_stack[index_inner] = label_patch_out.unsqueeze(0)
 
-                return image_patch_normal_stack.unsqueeze(1), image_patch_low_up_stack.unsqueeze(1), label_patch_out_stack.unsqueeze(1)
+                return image_patch_normal_stack.unsqueeze(1), image_patch_low_up_stack.unsqueeze(
+                    1), label_patch_out_stack.unsqueeze(1)
             else:
                 # extract the three different patches of labels
                 label_patch_normal, label_patch_low_up, label_patch_out = self.get_random_patch(label)
@@ -156,7 +166,7 @@ class DatasetHepatic(Dataset):
 
         elif self.run_mode == 'inference':
             # TODO fix uneven dimensions, otherwise run with batch size = 1
-            return image, label
+            return image, label, index_filename
 
     def __len__(self):
         return self.num_samples
@@ -199,25 +209,24 @@ class DatasetHepatic(Dataset):
         '''
         patch_size_half = patch_size // 2
 
-        if not self.use_probabilistic:
-            #  complete random
-            index_h = np.random.randint(patch_size_half, height - patch_size_half)
-            index_w = np.random.randint(patch_size_half, width - patch_size_half)
-            index_d = np.random.randint(patch_size_half, depth - patch_size_half)
-        else:
+        if self.use_probabilistic:
             # nearby currently selected label
             loop_condition = True
             background_count = 0
             while loop_condition:
+                # crop the image so that the patch does not go outside the area of the image
                 input_cropped = input[patch_size_half:height - patch_size_half, patch_size_half:width - patch_size_half,
                                 patch_size_half:depth - patch_size_half]
+                # all indices of the cropped image equal to the current selected label category
                 indices_all = np.array(np.where(input_cropped == self.current_selected_label))
                 # print(indices_all.shape[1])
                 if indices_all.shape[1] >= 1:
                     selected_index_w = np.random.randint(indices_all.shape[1])
                     selected_index = indices_all[:, selected_index_w]
 
-                    index_h, index_w, index_d = (selected_index[0]+patch_size_half, selected_index[1]+patch_size_half, selected_index[2]+patch_size_half)
+                    index_h, index_w, index_d = (
+                        selected_index[0] + patch_size_half, selected_index[1] + patch_size_half,
+                        selected_index[2] + patch_size_half)
                     # index_h, index_w, index_d = selected_index
                     loop_condition = False
                 else:
@@ -237,6 +246,11 @@ class DatasetHepatic(Dataset):
                             self.current_selected_label = 1
                             background_count += 1
                         loop_condition = True
+        else:
+            #  complete random
+            index_h = np.random.randint(patch_size_half, height - patch_size_half)
+            index_w = np.random.randint(patch_size_half, width - patch_size_half)
+            index_d = np.random.randint(patch_size_half, depth - patch_size_half)
 
         return (index_h, index_w, index_d)
 
@@ -268,17 +282,17 @@ class DatasetHepatic(Dataset):
         '''
         label_probability = np.random.rand()
 
-        if label_probability > 0.5:
-            self.current_selected_label = 1
-        else:
-            self.current_selected_label = 2
-
-        # if label_probability > 0.66:
-        #     self.current_selected_label = 2
-        # elif label_probability < 0.33:
+        # if label_probability > 0.5:
         #     self.current_selected_label = 1
         # else:
-        #     self.current_selected_label = 0
+        #     self.current_selected_label = 2
+
+        if label_probability > 0.66:
+            self.current_selected_label = 2
+        elif label_probability < 0.33:
+            self.current_selected_label = 1
+        else:
+            self.current_selected_label = 0
 
     def get_random_patch(self, input):
         '''
@@ -369,17 +383,31 @@ class DatasetHepatic(Dataset):
 
         if self.run_mode == 'train':
             num_samples = int(np.floor(self.train_percentage * num_samples))
+
+            self.filenames_image_nib = [current_sample['image'] for current_sample in data_meta['training']][
+                                       :num_samples]
+            self.filenames_label_nib = [current_sample['label'] for current_sample in data_meta['training']][
+                                       :num_samples]
+
+            self.filenames_image_npy = [os.path.join('ImagesTrNP', f'{filename[11:-7]}.npy') for filename in
+                                        self.filenames_image_nib]
+            self.filenames_label_npy = [os.path.join('labelsTrNP', f'{filename[11:-7]}.npy') for filename in
+                                        self.filenames_label_nib]
+            self.num_samples = num_samples
         else:
-            num_samples = int(np.ceil((1-self.train_percentage) * num_samples))
+            num_train = int(np.floor(self.train_percentage * num_samples))
 
-        self.filenames_image_nib = [current_sample['image'] for current_sample in data_meta['training']][:num_samples]
-        self.filenames_label_nib = [current_sample['label'] for current_sample in data_meta['training']][:num_samples]
+            self.filenames_image_nib = [current_sample['image'] for current_sample in data_meta['training']][
+                                       num_train:]
+            self.filenames_label_nib = [current_sample['label'] for current_sample in data_meta['training']][
+                                       num_train:]
 
-        self.filenames_image_npy = [os.path.join('ImagesTrNP', f'{filename[11:-7]}.npy') for filename in
-                                    self.filenames_image_nib][:num_samples]
-        self.filenames_label_npy = [os.path.join('labelsTrNP', f'{filename[11:-7]}.npy') for filename in
-                                    self.filenames_label_nib][:num_samples]
-
+            self.filenames_image_npy = [os.path.join('ImagesTrNP', f'{filename[11:-7]}.npy') for filename in
+                                        self.filenames_image_nib]
+            self.filenames_label_npy = [os.path.join('labelsTrNP', f'{filename[11:-7]}.npy') for filename in
+                                        self.filenames_label_nib]
+            # self.num_samples = int(np.ceil((1 - self.train_percentage) * num_samples))
+            self.num_samples = len(self.filenames_image_nib)
         if (not len(self.filenames_image_nib) == len(self.filenames_label_nib)):
             raise Exception('Inconsistent training image/label combination')
         if len(self.filenames_image_nib) == 0:
@@ -392,7 +420,5 @@ class DatasetHepatic(Dataset):
             self.filenames_image_nib = [current_sample for current_sample in data_meta['test']]
             if len(self.filenames_image_nib) == 0:
                 raise Exception(f'Error reading {self.run_mode} images')
-
-        self.num_samples = len(self.filenames_image_nib)
 
 

@@ -117,7 +117,7 @@ class ModelConainer():
             'beta_2': 0.999,
             'momentum': 0.9,
             'use_amsgrad': True,
-            'learning_rate': 0.0002,
+            'learning_rate': 0.0002,  # 0.0002
             'lr_scheduler_name': 'plateau',
             'patience_lr_scheduler': 3,
             'factor_lr_scheduler': 0.1,
@@ -198,7 +198,7 @@ class ModelConainer():
             'prefetch_factor': 2,
             'persistent_workers': True,
 
-            'resume_dir': 'step_1__15-17-04__02-04-2022__deep_medic__dice__adam__lr_0.0002__ep_100',
+            'resume_dir': 'step_1__04-24-39__03-04-2022__deep_medic__dice__adam__lr_0.0002__ep_100',
             'resume_epoch': 'best',
             'path_checkpoint': os.path.join('.', 'checkpoints'),
             'path_checkpoint_full': '',
@@ -777,14 +777,16 @@ class ModelConainer():
         self.__print(f'{"*" * 100}')
 
         for index_batch, batch in enumerate(self.dataloader_inference):
-            (images, labels_real) = self.__put_to_device(self.device, batch)
+            images, labels_real, index_filename = batch
+            (images, labels_real) = self.__put_to_device(self.device, [images, labels_real])
 
             labels_pred, loss_dice, loss_mse = self.__stride_depth_and_inference(
                 images_real=images,
                 labels_real=labels_real
             )
-
-            self.__print(f'{index_batch + 1}\tLoss DICE:\t{loss_dice:.5f}\tLoss MSE:\t{loss_mse:.5f}')
+            # assuming the batch size == 1
+            index_filename = index_filename[0]
+            self.__print(f'{index_batch + 1}: \tprediction_{index_filename}.npy\tLoss DICE:\t{loss_dice:.5f}\tLoss MSE:\t{loss_mse:.5f}')
 
             # im_real_one_hot = torch.zeros((labels_real.shape[0],
             #                                3,
@@ -810,7 +812,7 @@ class ModelConainer():
 
             predictions_path = os.path.join('predictions', 'abhijit')
             os.makedirs(predictions_path, exist_ok=True)
-            np.save(os.path.join(predictions_path, f'prediction_{index_batch + 1}.pkl'), labels_pred, allow_pickle=True)
+            np.save(os.path.join(predictions_path, f'prediction_{index_filename}'), labels_pred, allow_pickle=True)
 
     def __stride_depth_and_inference(self, images_real, labels_real):
         self.model.eval()
@@ -1011,8 +1013,8 @@ class ModelConainer():
                 h_start_orig = h_start_orig + patch_size_out
                 h_end_orig = h_end_orig + patch_size_out
 
-                loss_dice = sum(loss_list_dice) / len(loss_list_dice)
-                loss_mse = sum(loss_list_mse) / len(loss_list_mse)
+                loss_dice = sum(loss_list_dice) / (len(loss_list_dice) + 1e-9)
+                loss_mse = sum(loss_list_mse) / (len(loss_list_mse) + 1e-9)
 
         return labels_pred_whole_image, loss_dice, loss_mse
 
