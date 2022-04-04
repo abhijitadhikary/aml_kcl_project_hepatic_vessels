@@ -1,50 +1,22 @@
 import os
 import time
 import numpy as np
-import matplotlib.pyplot as plt
-# % matplotlib inline
 import nibabel as nib
+import random
 from tqdm import tqdm
-import json
-import cv2
+import matplotlib.pyplot as plt
+# %matplotlib inline
 import copy
-import torch.nn.functional as F
 from datetime import datetime
 from imp import reload
-import yaml
-
 import json
-import sys
 import logging
-
 import torch
-import torchvision
 import torch.optim as optim
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 import torch.nn.functional as F
 import torchvision.transforms as transforms
-
-# from dataloader_top_left import DatasetHepatic
-# from dataloader_center import DatasetHepatic
-
-from network_resnet_deepmedic import DeepMedic
-# from network_deepmedic import DeepMedic
-
-# from losses import GeneralizedDiceLoss
-
-from stride_checker import stride_depth_and_inference
-
-patch_size_normal = 25
-patch_size_low = 19
-patch_size_out = 9
-patch_low_factor = 3
-
-batch_size = 1
-batch_size_inner = 16
-assert batch_size == 1 or batch_size_inner == 1, 'either batch_size or batch_size_inner MUST equal 1 due to size issue'
-
-train_percentage = 0.8
 
 
 # DATALOADER
@@ -53,6 +25,14 @@ train_percentage = 0.8
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
+# for reproducability
+def set_seed(seed):
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
 
 class ToTorchTensor:
     '''
@@ -184,7 +164,8 @@ class DatasetHepatic(Dataset):
                     image_patch_low_up_stack[index_inner] = image_patch_low_up.unsqueeze(0)
                     label_patch_out_stack[index_inner] = label_patch_out.unsqueeze(0)
 
-                return image_patch_normal_stack.unsqueeze(1), image_patch_low_up_stack.unsqueeze(1), label_patch_out_stack.unsqueeze(1)
+                return image_patch_normal_stack.unsqueeze(1), image_patch_low_up_stack.unsqueeze(
+                    1), label_patch_out_stack.unsqueeze(1)
             else:
                 # extract the three different patches of labels
                 label_patch_normal, label_patch_low_up, label_patch_out = self.get_random_patch(label)
@@ -327,7 +308,7 @@ class DatasetHepatic(Dataset):
             Randomly with equal probability select one of the three labels to be the current label
         '''
         label_probability = np.random.rand()
-        mode = 'major' # equal, biased
+        mode = 'major'  # equal, biased
         if mode == 'biased':
             if label_probability > 0.5:
                 self.current_selected_label = 1
@@ -475,6 +456,105 @@ class DatasetHepatic(Dataset):
             if len(self.filenames_image_nib) == 0:
                 raise Exception(f'Error reading {self.run_mode} images')
 
+
+# MODEL DEEPMEDIC
+# ----------------------------------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------
+
+class ResBlock(nn.Module):
+    '''
+        Adapted from: https://github.com/pykao/BraTS2018-tumor-segmentation/blob/master/models/deepmedic.py
+    '''
+
+    def __init__(self, inplanes, planes):
+        super(ResBlock, self).__init__()
+
+        self.inplanes = inplanes
+        self.conv1 = nn.Conv3d(inplanes, planes, 3, bias=False)
+        self.bn1 = nn.BatchNorm3d(planes)
+        self.conv2 = nn.Conv3d(planes, planes, 3, bias=False)
+        self.bn2 = nn.BatchNorm3d(planes)
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        y = self.relu(self.bn1(self.conv1(x)))
+        y = self.bn2(self.conv2(y))
+        x = x[:, :, 2:-2, 2:-2, 2:-2]
+        y[:, :self.inplanes] += x
+        y = self.relu(y)
+        return y
+
+
+def conv3x3(inplanes, planes, ksize=3):
+    return nn.Sequential(
+        nn.Conv3d(inplanes, planes, ksize, bias=False),
+        nn.BatchNorm3d(planes),
+        nn.ReLU(inplace=True))
+
+
+def repeat(x, n=3):
+    # nc333
+    b, c, h, w, t = x.shape
+    x = x.unsqueeze(5).unsqueeze(4).unsqueeze(3)
+    x = x.repeat(1, 1, 1, n, 1, n, 1, n)
+    return x.view(b, c, n * h, n * w, n * t)
+
+
+class DeepMedic(nn.Module):
+    '''
+        Adapted from: https://github.com/pykao/BraTS2018-tumor-segmentation/blob/master/models/deepmedic.py
+    '''
+
+    def __init__(self, input_channels=1, n1=30, n2=40, n3=50, m=150, up=True):
+        super(DeepMedic, self).__init__()
+        # n1, n2, n3 = 30, 40, 50
+        num_classes = 3
+        n = 2 * n3
+        self.branch1 = nn.Sequential(
+            conv3x3(input_channels, n1),
+            conv3x3(n1, n1),
+            ResBlock(n1, n2),
+            ResBlock(n2, n2),
+            ResBlock(n2, n3))
+
+        self.branch2 = nn.Sequential(
+            conv3x3(input_channels, n1),
+            conv3x3(n1, n1),
+            conv3x3(n1, n2),
+            conv3x3(n2, n2),
+            conv3x3(n2, n2),
+            conv3x3(n2, n2),
+            conv3x3(n2, n3),
+            conv3x3(n3, n3))
+
+        self.up3 = nn.Upsample(scale_factor=3, mode='trilinear', align_corners=False) if up else repeat
+
+        self.fc = nn.Sequential(
+            conv3x3(n, m, 1),
+            conv3x3(m, m, 1),
+            nn.Conv3d(m, num_classes, 1)
+        )
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv3d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, nn.BatchNorm3d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, inputs):
+        x1, x2 = inputs
+        x1 = self.branch1(x1)
+        x2 = self.branch2(x2)
+        x2 = self.up3(x2)
+        x = torch.cat([x1, x2], 1)
+        x = self.fc(x)
+        return x
+
+
 # TRAIN/VAL/TEST
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
@@ -527,73 +607,19 @@ class GeneralizedDiceLoss(nn.Module):
 
 
 class ModelConainer():
-    def __init__(self):
-        self.__init_model_params()
-
-    def __init_model_params(self):
-        self.params_model = {
-            'experiment_name': 'step_1',
-            'model_name': 'deep_medic',
-            'patch_size_normal': 25,
-            'patch_size_low': 19,
-            'patch_size_out': 9,
-            'patch_low_factor': 3,
-            'run_mode': None,
-            'dataset_variant': 'npy',  # npy, nib
-            'create_numpy_dataset': False,
-            'init_timestamp': datetime.now().strftime("%H-%M-%S__%d-%m-%Y")
-        }
+    def __init__(self, params_model):
+        self.params_model = params_model
 
     def __init_train_params(self):
         self.run_mode = 'train'
-        self.params_train = {
-            'optimizer_name': 'adam',  # adam, sgd_w_momentum
-            'loss_name': 'dice',  # dice, mse, ce, dice_n_mse
-            'beta_1': 0.9,
-            'beta_2': 0.999,
-            'momentum': 0.9,
-            'use_amsgrad': True,
-            'learning_rate': 0.0002,  # 0.0002
-            'lr_scheduler_name': 'plateau',
-            'patience_lr_scheduler': 3,
-            'factor_lr_scheduler': 0.1,
-            'early_stop_condition': True,
-            'patience_early_stop': 5,
-            'early_stop_patience_counter': 0,
-            'min_epochs_to_train': 10,
-            'num_epochs': 100,
-            'min_early_stop': 20,
-            'save_every_epoch': True,
-
-            'save_condition': True,  # whether to save the model
-            'resume_condition': False,  # whether to resume training
-
-            'resume_dir': '14-10-08__01-04-2022__deep_medic__dice__adam__lr_0.0001__ep_50',
-            'resume_epoch': 'latest',
-
-            'batch_size': 8,  # 8
-            'batch_size_inner': 16,  # 16
-            'train_percentage': 0.8,
-            'num_workers': 8,  # 8
-            'pin_memory': True,
-            'prefetch_factor': 16,
-            'persistent_workers': True,
-
-            'path_checkpoint': os.path.join('.', 'checkpoints'),
-            'path_checkpoint_full': '',
-            'dirname_checkpoint': '',
-            'filename_params': 'params.json',
-            'filename_logger': 'logger.txt',
-            'path_params_full': '',
-            'path_logger_full': ''
-        }
 
         self.loss_dict_train = {
             'total': [],
             'dice': [],
             'mse': [],
             'ce': [],
-            'dice_n_mse': []
+            'dice_n_mse': [],
+            'dice_n_mse_n_ce': []
         }
 
         self.loss_dict_val = {
@@ -601,7 +627,8 @@ class ModelConainer():
             'dice': [],
             'mse': [],
             'ce': [],
-            'dice_n_mse': []
+            'dice_n_mse': [],
+            'dice_n_mse_n_ce': []
         }
 
         self.loss_best_train = {
@@ -609,7 +636,8 @@ class ModelConainer():
             'dice': np.inf,
             'mse': np.inf,
             'ce': np.inf,
-            'dice_n_mse': np.inf
+            'dice_n_mse': np.inf,
+            'dice_n_mse_n_ce': np.inf
         }
 
         self.loss_best_val = {
@@ -617,29 +645,12 @@ class ModelConainer():
             'dice': np.inf,
             'mse': np.inf,
             'ce': np.inf,
-            'dice_n_mse': np.inf
+            'dice_n_mse': np.inf,
+            'dice_n_mse_n_ce': np.inf
         }
-
-        # assert self.params_train['batch_size'] == 1 or self.params_train[
-        #     'batch_size_inner'] == 1, 'either must be 1, size issue'
 
     def __init_inference_params(self):
         self.run_mode = 'inference'
-        self.params_inference = {
-            'loss_name': 'dice',
-            'batch_size': 1,
-            'train_percentage': 0.8,
-            'num_workers': 1,  # 8
-            'pin_memory': True,
-            'prefetch_factor': 2,
-            'persistent_workers': True,
-
-            'resume_dir': self.resume_dir,
-            'resume_epoch': 'best',
-            'path_checkpoint': os.path.join('.', 'checkpoints'),
-            'path_checkpoint_full': '',
-            'dirname_checkpoint': '',
-        }
 
     def __setup_logger(self):
 
@@ -687,7 +698,8 @@ class ModelConainer():
                                                              self.params_train['filename_logger'])
         os.makedirs(self.params_train['path_checkpoint_full'], exist_ok=True)
 
-    def train(self, transform_train):
+    def train(self, params_train, transform_train):
+        self.params_train = params_train
         self.transform_train = transform_train
         self.__init_train_params()
         self.__create_checkpoint_dir()
@@ -695,8 +707,10 @@ class ModelConainer():
         self.__setup_logger()
         self.__fit_model()
 
-    def inference(self, resume_dir):
-        self.resume_dir = resume_dir
+    def inference(self, params_inference):
+
+        self.params_inference = params_inference
+
         self.__init_inference_params()
         self.__run_inference()
 
@@ -891,7 +905,7 @@ class ModelConainer():
             save_path = os.path.join(self.params_train['path_checkpoint_full'], f'latest.pth')
             torch.save(save_dict, save_path)
 
-            if self.loss_dict_val['total'][-1] < min(self.loss_dict_val['total']):
+            if self.loss_dict_val['total'][-1] <= min(self.loss_dict_val['total']):
                 save_path = os.path.join(self.params_train['path_checkpoint_full'], f'best.pth')
                 torch.save(save_dict, save_path)
                 self.__print(f'{"*" * 10}\tNew best model saved at:\t{self.index_epoch + 1}\t{"*" * 10}')
@@ -980,7 +994,9 @@ class ModelConainer():
         loss_list_ce = []
         loss_list_mse = []
         loss_list_dice_n_mse = []
-        loss_total, loss_dice, loss_mse, loss_ce, loss_dice_n_mse = np.Inf, np.Inf, np.Inf, np.Inf, np.Inf
+        loss_list_dice_n_mse_n_ce = []
+
+        loss_total, loss_dice, loss_mse, loss_ce, loss_dice_n_mse, loss_dice_n_mse_n_ce = np.Inf, np.Inf, np.Inf, np.Inf, np.Inf, np.inf
 
         for index_batch, batch in tqdm(enumerate(dataloader), leave=False, total=len(dataloader)):
             if run_mode == 'train':
@@ -1061,6 +1077,20 @@ class ModelConainer():
                 loss_list_dice.append(loss_dice.item())
                 loss_list_mse.append(loss_mse.item())
                 loss_list_dice_n_mse.append(loss_dice_n_mse.item())
+            elif self.params_train['loss_name'] == 'dice_n_mse_n_ce':
+                loss_dice = self.criterion_dice(F.softmax(label_patch_out_pred.float(), dim=1),
+                                                label_patch_out_real_one_hot.float())
+                loss_mse = self.criterion_mse(F.softmax(label_patch_out_pred.float(), dim=1),
+                                              label_patch_out_real_one_hot.float())
+                loss_ce = self.criterion_ce(label_patch_out_pred.float(), label_patch_out_real.squeeze(1).long())
+
+                loss_dice_n_mse_n_ce = loss_dice + loss_mse + loss_ce
+
+                loss_total = loss_dice_n_mse_n_ce
+                loss_list_dice.append(loss_dice.item())
+                loss_list_mse.append(loss_mse.item())
+                loss_list_ce.append(loss_ce.item())
+                loss_list_dice_n_mse_n_ce.append(loss_dice_n_mse_n_ce.item())
             else:
                 raise NotImplementedError(f'Invalid criterion selected:\t{self.params_train["loss_name"]}')
 
@@ -1101,20 +1131,24 @@ class ModelConainer():
             loss_ce = sum(loss_list_ce) / len(loss_list_ce)
         if len(loss_list_dice_n_mse) > 0:
             loss_dice_n_mse = sum(loss_list_dice_n_mse) / len(loss_list_dice_n_mse)
+        if len(loss_list_dice_n_mse_n_ce) > 0:
+            loss_dice_n_mse_n_ce = sum(loss_list_dice_n_mse_n_ce) / len(loss_list_dice_n_mse_n_ce)
 
         if run_mode == 'train':
             self.loss_dict_train['total'].append(loss_total.item())
             self.loss_dict_train['dice'].append(loss_dice)
             self.loss_dict_train['mse'].append(loss_mse)
             self.loss_dict_train['ce'].append(loss_ce)
-            self.loss_dict_train['dice_n_mse'].append(loss_mse)
+            self.loss_dict_train['dice_n_mse'].append(loss_dice_n_mse)
+            self.loss_dict_train['dice_n_mse_n_ce'].append(loss_dice_n_mse_n_ce)
 
         elif run_mode == 'val':
             self.loss_dict_val['total'].append(loss_total.item())
             self.loss_dict_val['dice'].append(loss_dice)
             self.loss_dict_val['mse'].append(loss_mse)
             self.loss_dict_val['ce'].append(loss_ce)
-            self.loss_dict_val['dice_n_mse'].append(loss_mse)
+            self.loss_dict_val['dice_n_mse'].append(loss_dice_n_mse)
+            self.loss_dict_val['dice_n_mse_n_ce'].append(loss_dice_n_mse_n_ce)
 
     def __update_best_losses(self):
         '''
@@ -1222,7 +1256,7 @@ class ModelConainer():
             images, labels_real, index_filename = batch
             (images, labels_real) = self.__put_to_device(self.device, [images, labels_real])
 
-            labels_pred, loss_dice, loss_mse = self.__stride_depth_and_inference(
+            labels_pred, labels_pred_probabilistic, loss_dice, loss_mse = self.__stride_depth_and_inference(
                 images_real=images,
                 labels_real=labels_real
             )
@@ -1231,31 +1265,13 @@ class ModelConainer():
             self.__print(
                 f'{index_batch + 1}: \tprediction_{index_filename}.npy\tLoss DICE:\t{loss_dice:.5f}\tLoss MSE:\t{loss_mse:.5f}')
 
-            im_real_one_hot = torch.zeros((labels_real.shape[0],
-                                           3,
-                                           labels_real.shape[1],
-                                           labels_real.shape[2],
-                                           labels_real.shape[3])).to(labels_real.device)
-
-            im_real_one_hot[:, 0] = torch.where(labels_real == 0, 1, 0)
-            im_real_one_hot[:, 1] = torch.where(labels_real == 1, 1, 0)
-            im_real_one_hot[:, 2] = torch.where(labels_real == 2, 1, 0)
-
-            im_pred_one_hot = torch.zeros((labels_pred.shape[0],
-                                           3,
-                                           labels_pred.shape[1],
-                                           labels_pred.shape[2],
-                                           labels_pred.shape[3])).to(labels_pred.device)
-
-            im_pred_one_hot[:, 0] = torch.where(labels_pred == 0, 1, 0)
-            im_pred_one_hot[:, 1] = torch.where(labels_pred == 1, 1, 0)
-            im_pred_one_hot[:, 2] = torch.where(labels_pred == 2, 1, 0)
-
-            labels_real, labels_pred = labels_real.cpu().detach().numpy(), labels_pred.cpu().detach().numpy()
+            labels_real, labels_pred, labels_pred_probabilistic = labels_real.cpu().detach().numpy(), labels_pred.cpu().detach().numpy(), labels_pred_probabilistic.cpu().detach().numpy()
 
             predictions_path = os.path.join('predictions', 'abhijit')
             os.makedirs(predictions_path, exist_ok=True)
-            np.save(os.path.join(predictions_path, f'prediction_{index_filename}'), labels_pred, allow_pickle=True)
+            # saves the probabilistic outputs (bs x 3 x h x w x d)
+            np.save(os.path.join(predictions_path, f'prediction_{index_filename}'), labels_pred_probabilistic,
+                    allow_pickle=True)
 
     def __stride_depth_and_inference(self, images_real, labels_real):
         self.model.eval()
@@ -1285,7 +1301,8 @@ class ModelConainer():
 
             # create a placeholder for the padded image
             images_padded = torch.zeros((batch_size, height_new, width_new, depth_new), dtype=torch.float32).to(device)
-            labels_real_padded = torch.zeros((batch_size, height_new, width_new, depth_new), dtype=torch.float32).to(device)
+            labels_real_padded = torch.zeros((batch_size, height_new, width_new, depth_new), dtype=torch.float32).to(
+                device)
 
             # labels_padded = torch.zeros((batch_size, height_new, width_new, depth_new), dtype=torch.float32).to(device)
             # print(f'images_real.shape:\t{images_real.shape}')
@@ -1312,6 +1329,8 @@ class ModelConainer():
 
             # placeholder to store the inferred/reconstructed image labels
             labels_pred_whole_image = torch.zeros_like(images_real).to(device)
+            labels_pred_whole_image_probabilistic = torch.zeros((batch_size, 3, height, width, depth),
+                                                                dtype=torch.float32).to(device)
             # print(f'labels_pred_whole_image.shape:\t{labels_pred_whole_image.shape}')
 
             # indices of the original image
@@ -1476,10 +1495,17 @@ class ModelConainer():
                         :label_patch_out_pred_double.shape[3]] = label_patch_out_pred_double
                         label_patch_out_pred_double = label_patch_out_pred_double_temp
 
-                        bs, h, w, d = labels_pred_whole_image[:, h_start_orig: h_end_orig, w_start_orig: w_end_orig,
+                        bs, h, w, d = labels_pred_whole_image[:, h_start_orig: h_end_orig,
+                                      w_start_orig: w_end_orig,
                                       d_start_orig: d_end_orig].shape
+
+                        # save the pixel wise predictions
                         labels_pred_whole_image[:, h_start_orig: h_end_orig, w_start_orig: w_end_orig,
-                        d_start_orig: d_end_orig] = label_patch_out_pred_double[:, :h, :w, :d]
+                        d_start_orig: d_end_orig] = label_patch_out_pred_double[:, :h, :w, :d].detach()
+
+                        # save the probabilistic predictions
+                        labels_pred_whole_image_probabilistic[:, :, h_start_orig: h_end_orig, w_start_orig: w_end_orig,
+                        d_start_orig: d_end_orig] = label_patch_out_pred[:, :, :h, :w, :d].detach()
 
                         d_start_orig = d_start_orig + patch_size_out
                         d_end_orig = d_end_orig + patch_size_out
@@ -1493,17 +1519,91 @@ class ModelConainer():
                 loss_dice = sum(loss_list_dice) / (len(loss_list_dice) + 1e-9)
                 loss_mse = sum(loss_list_mse) / (len(loss_list_mse) + 1e-9)
 
-        return labels_pred_whole_image, loss_dice, loss_mse
+        return labels_pred_whole_image, labels_pred_whole_image_probabilistic, loss_dice, loss_mse
 
 
 if __name__ == '__main__':
-    # torch.multiprocessing.freeze_support()
+    params_model = {
+        'experiment_name': 'step_1',
+        'model_name': 'deep_medic',
+        'patch_size_normal': 25,
+        'patch_size_low': 19,
+        'patch_size_out': 9,
+        'patch_low_factor': 3,
+        'run_mode': None,
+        'dataset_variant': 'npy',  # npy, nib
+        'create_numpy_dataset': False,
+        'init_timestamp': datetime.now().strftime("%H-%M-%S__%d-%m-%Y")
+    }
 
+    params_train = {
+        'optimizer_name': 'adam',  # adam, sgd_w_momentum
+        'loss_name': 'dice',  # dice, mse, ce, dice_n_mse, dice_n_mse_n_ce
+        'beta_1': 0.9,
+        'beta_2': 0.999,
+        'momentum': 0.9,
+        'use_amsgrad': True,
+        'learning_rate': 0.0002,  # 0.0002
+        'lr_scheduler_name': 'plateau',
+        'patience_lr_scheduler': 2,
+        'factor_lr_scheduler': 0.1,
+        'early_stop_condition': True,
+        'patience_early_stop': 5,
+        'early_stop_patience_counter': 0,
+        'min_epochs_to_train': 10,
+        'num_epochs': 100,
+        'save_every_epoch': True,
+
+        'save_condition': True,  # whether to save the model
+        'resume_condition': False,  # whether to resume training
+
+        'resume_dir': '14-10-08__01-04-2022__deep_medic__dice__adam__lr_0.0001__ep_50',
+        'resume_epoch': 'latest',
+
+        'batch_size': 8,  # 8
+        'batch_size_inner': 16,  # 16 (how many patches to generate per sample)
+        'train_percentage': 0.8,
+        'num_workers': 8,  # 8
+        'pin_memory': True,
+        'prefetch_factor': 16,
+        'persistent_workers': True,
+
+        'path_checkpoint': os.path.join('.', 'checkpoints'),
+        'path_checkpoint_full': '',
+        'dirname_checkpoint': '',
+        'filename_params': 'params.json',
+        'filename_logger': 'logger.txt',
+        'path_params_full': '',
+        'path_logger_full': ''
+    }
+
+    # instanciate model
+    set_seed(1)
+    model_container = ModelConainer(params_model)
+
+    # basic transformations for part 1
     transform_train = transforms.Compose([
         ToTorchTensor(),
         transforms.Normalize(mean=0.5, std=0.5)
     ])
 
-    model_container = ModelConainer()
-    # model_container.train(transform_train=transform_train)
-    model_container.inference(resume_dir='step_1__10-18-19__04-04-2022__deep_medic__dice__adam__lr_0.0002__ep_100')
+    # train the model
+    model_container.train(params_train=params_train, transform_train=transform_train)
+
+    # params_inference = {
+    #     'loss_name': 'dice',
+    #     'batch_size': 1,
+    #     'train_percentage': 0.8,
+    #     'num_workers': 1,  # 8
+    #     'pin_memory': True,
+    #     'prefetch_factor': 2,
+    #     'persistent_workers': True,
+    #
+    #     'resume_dir': 'step_1__10-18-19__04-04-2022__deep_medic__dice__adam__lr_0.0002__ep_100',
+    #     'resume_epoch': 'best',
+    #     'path_checkpoint': os.path.join('.', 'checkpoints'),
+    #     'path_checkpoint_full': '',
+    #     'dirname_checkpoint': '',
+    # }
+    #
+    # model_container.inference(params_inference=params_inference)
