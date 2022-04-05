@@ -47,18 +47,6 @@ class ToTorchTensor:
     def __call__(self, input):
         return torch.tensor(input, dtype=self.dtype)
 
-
-class ZeroOneNormalize:
-    '''
-        Transforms a numpy ndarray to a torch tensor of the supplied datatype
-    '''
-
-    def __call__(self, input):
-        input = input - torch.min(input)
-        input = input / torch.max(input)
-        return input
-
-
 class DatasetHepatic(Dataset):
     '''
         min = 24
@@ -142,11 +130,6 @@ class DatasetHepatic(Dataset):
         index_filename = self.filenames_image_npy[index][25:28]
 
         if self.run_mode in ['train', 'val']:
-            '''
-                # normal = 25
-                # low = 19 (57)
-                # out = 9
-            '''
             if self.batch_size_inner > 1:
                 image_patch_normal_stack = torch.zeros(
                     (self.batch_size_inner, self.patch_size_normal, self.patch_size_normal, self.patch_size_normal),
@@ -338,11 +321,6 @@ class DatasetHepatic(Dataset):
             input = temp_array
             depth = temp_array.shape[2]
 
-        # temp_array = np.zeros((height, width, 512))
-        # temp_array[:, :, :depth] = input
-        # input = temp_array
-        # depth = temp_array.shape[2]
-
         loop_condition = True
         if self.use_probabilistic:
             self.set_probabilistic_label()
@@ -352,27 +330,11 @@ class DatasetHepatic(Dataset):
             # get a valid coordinate and extract the patch
             self.coordinate_center = self.get_rand_index_3D(input, height, width, depth, self.patch_size_low_up)
 
-            # if self.coordinate_center[0] + self.patch_size_low_up // 2 >
-
             patch_normal = self.get_3D_crop(input, self.coordinate_center, self.patch_size_normal)
             patch_low_up = self.get_3D_crop(input, self.coordinate_center, self.patch_size_low_up)
             patch_out = self.get_3D_crop(input, self.coordinate_center, self.patch_size_out)
 
-            # print(f'{patch_normal.shape}\t{patch_low_up.shape}\t{patch_out.shape}')
             loop_condition = False
-
-            # if (patch_normal.shape == (25, 25, 25)) and (patch_low_up.shape == (19, 19, 19)) and (patch_out.shape == (9, 9, 9)):
-            #     loop_condition = False
-
-            # if self.use_probabilistic:
-            #     # get the percentage of the current label compared to the whole patch
-            #     # TODO update this part
-            #     pass
-            #     self.label_percentage_current = self.get_label_percentage(patch_out, self.current_selected_label)
-            #     if self.label_percentage_current > self.label_percentage:
-            #         loop_condition = False
-            # else:
-            #     loop_condition = False
 
         return patch_normal, patch_low_up, patch_out
 
@@ -1752,8 +1714,8 @@ if __name__ == '__main__':
         'resume_dir': '14-10-08__01-04-2022__deep_medic__dice__adam__lr_0.0001__ep_50',
         'resume_epoch': 'latest',
 
-        'batch_size': 2,  # 8
-        'batch_size_inner': 2,  # 16 (how many patches to generate per sample)
+        'batch_size': 8,  # 8
+        'batch_size_inner': 16,  # 16 (how many patches to generate per sample)
         'train_percentage': 0.8,
         'num_workers': 8,  # 8
         'pin_memory': True,
