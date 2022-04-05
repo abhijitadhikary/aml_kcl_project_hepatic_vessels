@@ -11,6 +11,7 @@ from datetime import datetime
 from imp import reload
 import json
 import logging
+import SimpleITK as sitk
 import torch
 import torch.optim as optim
 import torch.nn as nn
@@ -34,13 +35,17 @@ def set_seed(seed):
     np.random.seed(seed)
     random.seed(seed)
 
+
 class ToTorchTensor:
     '''
         Transforms a numpy ndarray to a torch tensor of the supplied datatype
     '''
 
-    def __call__(self, input, datatype=torch.float32, requires_grad=False):
-        return torch.tensor(input, dtype=datatype, requires_grad=requires_grad)
+    def __init__(self, dtype=torch.float32):
+        self.dtype = dtype
+
+    def __call__(self, input):
+        return torch.tensor(input, dtype=self.dtype)
 
 
 class ZeroOneNormalize:
@@ -63,7 +68,8 @@ class DatasetHepatic(Dataset):
     '''
 
     def __init__(self, run_mode='train',
-                 transform=None,
+                 transform_image=None,
+                 transform_label=None,
                  patch_size_normal=25,
                  patch_size_low=19,
                  patch_size_out=9,
@@ -73,7 +79,10 @@ class DatasetHepatic(Dataset):
                  use_probabilistic=False,
                  create_numpy_dataset=False,
                  dataset_variant='nib',
-                 train_percentage=0.8
+                 train_percentage=0.8,
+                 use_elastic_deformation=False,
+                 user_affine_transformation=False,
+                 num_controlpoints=20, sigma=5, rotation=10, scale=(0.90, 1.10), shear=(0.01, 0.02)
                  ):
 
         self.run_mode = run_mode
@@ -91,15 +100,25 @@ class DatasetHepatic(Dataset):
         self.use_probabilistic = use_probabilistic
         self.fetch_filenames()
         self.create_numpy_dataset()
+        self.use_elastic_deformation = use_elastic_deformation
+        self.use_affine_transformation = user_affine_transformation
+        self.elastic_deformation = ElasticDeformation(num_controlpoints=num_controlpoints, sigma=sigma)
+        self.affine_transformation = AffineTransformation(rotation=rotation, scale=scale, shear=shear)
 
-        if transform is None:
-            self.transform = transforms.Compose([
-                ToTorchTensor(),
+        if transform_image is None:
+            self.transform_image = transforms.Compose([
+                ToTorchTensor(dtype=torch.float32),
                 transforms.Normalize(mean=0.5, std=0.5)
             ])
         else:
-            self.transform = transform
-        # self.transform = transform if not transform is None else transforms.Compose([ToTorchTensor()])
+            self.transform_image = transform_image
+
+        if transform_label is None:
+            self.transform_label = transforms.Compose([
+                ToTorchTensor(torch.int64)
+            ])
+        else:
+            self.transform_label = transform_label
 
     def __getitem__(self, index):
         if self.dataset_variant == 'nib':
@@ -108,6 +127,16 @@ class DatasetHepatic(Dataset):
         elif self.dataset_variant == 'npy':
             image = self.read_file_npy(self.filenames_image_npy[index])
             label = self.read_file_npy(self.filenames_label_npy[index])
+
+        image = self.transform_image(image)
+        label = self.transform_label(label)
+        if self.use_elastic_deformation:
+            image, label = self.elastic_deformation(image, label)
+        if self.use_affine_transformation:
+            image, label, _, _ = self.affine_transformation(image, label)
+
+        image = image.detach().numpy()
+        label = label.detach().numpy()
 
         # index of the original filenames as in the dataset folders
         index_filename = self.filenames_image_npy[index][25:28]
@@ -118,15 +147,6 @@ class DatasetHepatic(Dataset):
                 # low = 19 (57)
                 # out = 9
             '''
-
-            # image_temp = np.zeros((512, 512, 512))
-            # image_temp[:image.shape[0], :image.shape[1], :image.shape[2]] = image
-            # image = image_temp
-            #
-            # label_temp = np.zeros((512, 512, 512))
-            # label_temp[:label.shape[0], :label.shape[1], :label.shape[2]] = label
-            # label = label_temp
-
             if self.batch_size_inner > 1:
                 image_patch_normal_stack = torch.zeros(
                     (self.batch_size_inner, self.patch_size_normal, self.patch_size_normal, self.patch_size_normal),
@@ -147,25 +167,11 @@ class DatasetHepatic(Dataset):
                     image_patch_low_up = self.get_3D_crop(image, self.coordinate_center, self.patch_size_low_up)
                     image_patch_out = self.get_3D_crop(image, self.coordinate_center, self.patch_size_out)
 
-                    # apply transformation on images
-                    image_patch_normal = self.transform(image_patch_normal)
-                    image_patch_low_up = self.transform(image_patch_low_up)
-                    # image_patch_out = self.transform(image_patch_out)
+                    image_patch_normal_stack[index_inner] = torch.tensor(image_patch_normal, dtype=torch.float32).unsqueeze(0)
+                    image_patch_low_up_stack[index_inner] = torch.tensor(image_patch_low_up, dtype=torch.float32).unsqueeze(0)
+                    label_patch_out_stack[index_inner] = torch.tensor(label_patch_out, dtype=torch.float32).unsqueeze(0)
 
-                    # # resize (downsample) the low resolution images and labels
-                    # image_patch_low = F.avg_pool3d(input=image_patch_low_up.unsqueeze(0), kernel_size=3, stride=None).squeeze(0)
-
-                    # transform the labels to tensors
-                    # label_patch_normal = torch.tensor(label_patch_normal, dtype=torch.int64)
-                    # label_patch_low_up = torch.tensor(label_patch_low_up, dtype=torch.int64)
-                    label_patch_out = torch.tensor(label_patch_out, dtype=torch.int64)
-
-                    image_patch_normal_stack[index_inner] = image_patch_normal.unsqueeze(0)
-                    image_patch_low_up_stack[index_inner] = image_patch_low_up.unsqueeze(0)
-                    label_patch_out_stack[index_inner] = label_patch_out.unsqueeze(0)
-
-                return image_patch_normal_stack.unsqueeze(1), image_patch_low_up_stack.unsqueeze(
-                    1), label_patch_out_stack.unsqueeze(1)
+                return image_patch_normal_stack.unsqueeze(1), image_patch_low_up_stack.unsqueeze(1), label_patch_out_stack.unsqueeze(1)
             else:
                 # extract the three different patches of labels
                 label_patch_normal, label_patch_low_up, label_patch_out = self.get_random_patch(label)
@@ -175,24 +181,13 @@ class DatasetHepatic(Dataset):
                 image_patch_low_up = self.get_3D_crop(image, self.coordinate_center, self.patch_size_low_up)
                 image_patch_out = self.get_3D_crop(image, self.coordinate_center, self.patch_size_out)
 
-                # apply transformation on images
-                image_patch_normal = self.transform(image_patch_normal)
-                image_patch_low_up = self.transform(image_patch_low_up)
-                # image_patch_out = self.transform(image_patch_out)
-
-                # resize (downsample) the low resolution images and labels
-                # image_patch_low = F.avg_pool3d(input=image_patch_low_up.unsqueeze(0), kernel_size=3, stride=None).squeeze(0)
-
-                # transform the labels to tensors
-                # label_patch_normal = torch.tensor(label_patch_normal, dtype=torch.int64)
-                # label_patch_low_up = torch.tensor(label_patch_low_up, dtype=torch.int64)
-                label_patch_out = torch.tensor(label_patch_out, dtype=torch.int64)
-
-                return image_patch_normal.unsqueeze(0), image_patch_low_up.unsqueeze(0), label_patch_out.unsqueeze(0)
+                return torch.tensor(image_patch_normal, dtype=torch.float32).unsqueeze(0), \
+                       torch.tensor(image_patch_low_up, dtype=torch.float32).unsqueeze(0), \
+                       torch.tensor(label_patch_out, dtype=torch.int64).unsqueeze(0)
 
         elif self.run_mode == 'inference':
             # TODO fix uneven dimensions, otherwise run with batch size = 1
-            image = self.transform(image)
+            image = self.transform_image(image)
             return image, label, index_filename
 
     def __len__(self):
@@ -698,7 +693,7 @@ class ModelConainer():
                                                              self.params_train['filename_logger'])
         os.makedirs(self.params_train['path_checkpoint_full'], exist_ok=True)
 
-    def train(self, params_train, transform_train):
+    def train(self, params_train, transform_train=None):
         self.params_train = params_train
         self.transform_train = transform_train
         self.__init_train_params()
@@ -721,7 +716,7 @@ class ModelConainer():
         if run_mode == 'train':
             self.dataset_train = DatasetHepatic(
                 run_mode='train',
-                transform=self.transform_train,
+                transform_image=self.transform_train,
                 label_percentage=0.0001,
                 use_probabilistic=True,
                 patch_size_normal=self.params_model['patch_size_normal'],
@@ -731,13 +726,20 @@ class ModelConainer():
                 create_numpy_dataset=self.params_model['create_numpy_dataset'],
                 dataset_variant=self.params_model['dataset_variant'],
                 batch_size_inner=self.params_train['batch_size_inner'],
-                train_percentage=self.params_train['train_percentage']
+                train_percentage=self.params_train['train_percentage'],
+                use_elastic_deformation=self.params_train['use_elastic_deformation'],
+                user_affine_transformation=self.params_train['user_affine_transformation'],
+                num_controlpoints=self.params_train['num_controlpoints'],
+                sigma=self.params_train['sigma'],
+                rotation=self.params_train['rotation'],
+                scale=self.params_train['scale'],
+                shear=self.params_train['shear']
             )
 
             self.dataset_val = DatasetHepatic(
                 run_mode='val',
                 label_percentage=0.0001,
-                transform=None,
+                transform_image=None,
                 use_probabilistic=True,
                 patch_size_normal=self.params_model['patch_size_normal'],
                 patch_size_low=self.params_model['patch_size_low'],
@@ -772,7 +774,7 @@ class ModelConainer():
         elif run_mode == 'inference':
             self.dataset_inference = DatasetHepatic(
                 run_mode='inference',
-                transform=None,
+                transform_image=None,
                 label_percentage=0.0001,
                 use_probabilistic=True,
                 patch_size_normal=self.params_model['patch_size_normal'],
@@ -1522,6 +1524,196 @@ class ModelConainer():
         return labels_pred_whole_image, labels_pred_whole_image_probabilistic, loss_dice, loss_mse
 
 
+# TRANSFORMATIONS
+# ----------------------------------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------
+
+class ElasticDeformation:
+    """
+        Classs containing Elastic Deformation Transformation
+        Adapted from week 3 AML tutorial materials
+    """
+
+    def __init__(self, num_controlpoints=None, sigma=None):
+
+        self.num_controlpoints = num_controlpoints
+        self.sigma = sigma
+
+        # Random parameters if not defined
+        if self.sigma == None:
+            self.sigma = np.random.uniform(low=1, high=5)
+
+        if self.num_controlpoints == None:
+            self.num_controlpoints = int(np.random.uniform(low=1, high=6))
+
+    def create_elastic_deformation(self, image):
+        """
+            We need to parameterise our b-spline transform
+            The transform will depend on such variables as image size and sigma
+            Sigma modulates the strength of the transformation
+            The number of control points controls the granularity of our transform
+        """
+        # Create an instance of a SimpleITK image of the same size as our image
+        itkimg = sitk.GetImageFromArray(np.zeros(image.shape))
+
+        # This parameter is just a list with the number of control points per image dimensions
+        trans_from_domain_mesh_size = [self.num_controlpoints] * itkimg.GetDimension()
+
+        # We initialise the transform here: Passing the image size and the control point specifications
+        bspline_transformation = sitk.BSplineTransformInitializer(itkimg, trans_from_domain_mesh_size)
+
+        # Isolate the transform parameters: They will be all zero at this stage
+        params = np.asarray(bspline_transformation.GetParameters(), dtype=float)
+
+        # Let's initialise the transform by randomly initialising each parameter according to sigma
+        params = params + np.random.randn(params.shape[0]) * self.sigma
+
+        # Let's initialise the transform by randomly displacing each control point by a random distance (magnitude sigma)
+        bspline_transformation.SetParameters(tuple(params))
+
+        return bspline_transformation
+
+    def __call__(self, image, label):
+        # We need to choose an interpolation method for our transformed image, let's just go with b-spline
+        resampler = sitk.ResampleImageFilter()
+        resampler.SetInterpolator(sitk.sitkBSpline)
+
+        # Let's convert our image to an sitk image
+        sitk_image = sitk.GetImageFromArray(image)
+
+        # Specify the image to be transformed: This is the reference image
+        resampler.SetReferenceImage(sitk_image)
+        resampler.SetDefaultPixelValue(0)
+
+        # Initialise the transform
+        bspline_transform = self.create_elastic_deformation(image)
+
+        # Set the transform in the initialiser
+        resampler.SetTransform(bspline_transform)
+
+        # Carry out the resampling according to the transform and the resampling method
+        out_img_sitk = resampler.Execute(sitk_image)
+
+        # Convert the image back into a python array
+        out_img = sitk.GetArrayFromImage(out_img_sitk)
+
+        # We need to choose an interpolation method for our transformed image, let's just go with b-spline
+        resampler_label = sitk.ResampleImageFilter()
+        resampler_label.SetInterpolator(sitk.sitkNearestNeighbor)
+
+        # Let's convert our image to an sitk image
+        sitk_label = sitk.GetImageFromArray(label)
+
+        # Specify the image to be transformed: This is the reference image
+        resampler_label.SetReferenceImage(sitk_label)
+        resampler_label.SetDefaultPixelValue(0)
+
+        # Initialise the transform
+        bspline_transform = self.create_elastic_deformation(label)
+
+        # Set the transform in the initialiser
+        resampler_label.SetTransform(bspline_transform)
+
+        # Carry out the resampling according to the transform and the resampling method
+        out_label_sitk = resampler_label.Execute(sitk_label)
+
+        # Convert the image back into a python array
+        out_label = sitk.GetArrayFromImage(out_label_sitk)
+
+        return torch.tensor(out_img.reshape(image.shape), dtype=torch.float32), torch.tensor(out_label.reshape(image.shape), dtype=torch.int64)
+
+
+class AffineTransformation:
+    """
+        Classs containing Elastic Deformation Transformation
+    """
+
+    def __init__(self, rotation=5, scale=(0.95, 1.05), shear=(0.01, 0.02), return_inverse=False, inverse_matrix=None):
+        self.rotation = rotation
+        self.scale = scale
+        self.shear = shear
+        self.return_inverse = return_inverse
+        self.inverse_matrix = inverse_matrix
+
+    def get_transformation_matrix(self):
+        # apply rotation on the z-axis
+        degree_rotation = torch.tensor(1, dtype=torch.float32).uniform_(-self.rotation, self.rotation)
+        degree_rotation = (degree_rotation * torch.pi) / 180
+
+        matrix_rotation = torch.zeros((1, 4, 4), dtype=torch.float32)
+        matrix_rotation[0, 0, 0] = torch.cos(degree_rotation)
+        matrix_rotation[0, 0, 1] = torch.sin(degree_rotation)
+        matrix_rotation[0, 1, 0] = -torch.sin(degree_rotation)
+        matrix_rotation[0, 1, 1] = torch.cos(degree_rotation)
+        matrix_rotation[0, 2, 2] = 1
+        matrix_rotation[0, 3, 3] = 1
+
+        # apply scaling on each dimension
+        matrix_scale = torch.zeros((1, 4, 4), dtype=torch.float32)
+        matrix_scale[0, 0, 0] = torch.tensor(1, dtype=torch.float32).uniform_(self.scale[0], self.scale[1])
+        matrix_scale[0, 1, 1] = torch.tensor(1, dtype=torch.float32).uniform_(self.scale[0], self.scale[1])
+        matrix_scale[0, 2, 2] = torch.tensor(1, dtype=torch.float32).uniform_(self.scale[0], self.scale[1])
+        matrix_scale[0, 3, 3] = 1
+        # print(matrix_scale.shape)
+
+        # shear
+        degree_shear = torch.tensor((
+            torch.tensor(1, dtype=torch.float32).uniform_(self.shear[0], self.shear[1]),
+            torch.tensor(1, dtype=torch.float32).uniform_(self.shear[0], self.shear[1])
+        ))
+
+        matrix_shear = torch.zeros((1, 4, 4), dtype=torch.float32)
+        matrix_shear[0, 0, 0] = 1
+        matrix_shear[0, 0, 1] = degree_shear[0]
+        matrix_shear[0, 1, 0] = degree_shear[1]
+        matrix_shear[0, 1, 1] = 1
+        matrix_shear[0, 2, 2] = 1
+        matrix_shear[0, 3, 3] = 1
+
+        # generate the combined affine transformation matrix
+        self.matrix_affine = torch.matmul(matrix_shear, torch.matmul(matrix_rotation, matrix_scale))
+
+        # generate the inverse transformation matrix
+        self.matrix_affine_inv = torch.inverse(self.matrix_affine)
+
+        # return to original coordinates
+        self.matrix_affine = self.matrix_affine[:, 0:3, :]
+        self.matrix_affine_inv = self.matrix_affine_inv[:, 0:3, :]
+
+    def __call__(self, image, label):
+        if len(image.shape) == 3:
+            image = image.unsqueeze(0).unsqueeze(0)
+        if len(label.shape) == 3:
+            label = label.unsqueeze(0).unsqueeze(0)
+
+        # obtain transformation matrix
+        self.get_transformation_matrix()
+
+        # define the affine grid and apply transformation on images and labels
+        if self.return_inverse:
+            grid_affine = F.affine_grid(self.matrix_affine_inv, image.shape, align_corners=False)
+            image_at = F.grid_sample(image.float(), grid_affine, padding_mode="border", align_corners=False)
+            label_at = F.grid_sample(label.float(), grid_affine, mode='nearest', padding_mode="zeros",
+                                        align_corners=False)
+        else:
+            grid_affine = F.affine_grid(self.matrix_affine, image.shape, align_corners=False)
+            image_at = F.grid_sample(image.float(), grid_affine, padding_mode="border", align_corners=False)
+            label_at = F.grid_sample(label.float(), grid_affine, mode='nearest', padding_mode="zeros",
+                                        align_corners=False)
+
+        return image_at.squeeze(0).squeeze(0), label_at.squeeze(0).squeeze(0), self.matrix_affine, self.matrix_affine_inv
+
+
+# CONTROL POINT
+# ----------------------------------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------
+
 if __name__ == '__main__':
     params_model = {
         'experiment_name': 'step_1',
@@ -1560,12 +1752,12 @@ if __name__ == '__main__':
         'resume_dir': '14-10-08__01-04-2022__deep_medic__dice__adam__lr_0.0001__ep_50',
         'resume_epoch': 'latest',
 
-        'batch_size': 8,  # 8
-        'batch_size_inner': 16,  # 16 (how many patches to generate per sample)
+        'batch_size': 2,  # 8
+        'batch_size_inner': 2,  # 16 (how many patches to generate per sample)
         'train_percentage': 0.8,
         'num_workers': 8,  # 8
         'pin_memory': True,
-        'prefetch_factor': 16,
+        'prefetch_factor': 2,
         'persistent_workers': True,
 
         'path_checkpoint': os.path.join('.', 'checkpoints'),
@@ -1574,7 +1766,17 @@ if __name__ == '__main__':
         'filename_params': 'params.json',
         'filename_logger': 'logger.txt',
         'path_params_full': '',
-        'path_logger_full': ''
+        'path_logger_full': '',
+
+        'use_elastic_deformation': False,
+        'user_affine_transformation': False,
+
+        'num_controlpoints': 20,
+        'sigma': 5,
+
+        'rotation': 10,
+        'scale': (0.90, 1.10),
+        'shear': (0.01, 0.02)
     }
 
     # instanciate model
@@ -1582,28 +1784,41 @@ if __name__ == '__main__':
     model_container = ModelConainer(params_model)
 
     # basic transformations for part 1
+    # transform_train = transforms.Compose([
+    #     ToTorchTensor(),
+    #     transforms.Normalize(mean=0.5, std=0.5)
+    # ])
+
+    # transforms for part 4
     transform_train = transforms.Compose([
         ToTorchTensor(),
+        ElasticDeformation(num_controlpoints=20, sigma=5),
+        AffineTransformation(rotation=10, scale=(0.90, 1.10), shear=(0.01, 0.02)),
         transforms.Normalize(mean=0.5, std=0.5)
     ])
 
     # train the model
-    model_container.train(params_train=params_train, transform_train=transform_train)
+    # model_container.train(params_train=params_train)
 
-    # params_inference = {
-    #     'loss_name': 'dice',
-    #     'batch_size': 1,
-    #     'train_percentage': 0.8,
-    #     'num_workers': 1,  # 8
-    #     'pin_memory': True,
-    #     'prefetch_factor': 2,
-    #     'persistent_workers': True,
-    #
-    #     'resume_dir': 'step_1__10-18-19__04-04-2022__deep_medic__dice__adam__lr_0.0002__ep_100',
-    #     'resume_epoch': 'best',
-    #     'path_checkpoint': os.path.join('.', 'checkpoints'),
-    #     'path_checkpoint_full': '',
-    #     'dirname_checkpoint': '',
-    # }
-    #
-    # model_container.inference(params_inference=params_inference)
+    params_train['use_elastic_deformation'] = True
+    params_train['user_affine_transformation'] = True
+    # model_container.train(params_train=params_train)
+
+    params_inference = {
+        'loss_name': 'dice',
+        'batch_size': 1,
+        'train_percentage': 0.8,
+        'num_workers': 1,  # 8
+        'pin_memory': True,
+        'prefetch_factor': 2,
+        'persistent_workers': True,
+
+        'resume_dir': 'step_1__08-28-40__05-04-2022__deep_medic__dice__adam__lr_0.0002__ep_100',
+        'resume_epoch': 'best',
+        'path_checkpoint': os.path.join('.', 'checkpoints'),
+        'path_checkpoint_full': '',
+        'dirname_checkpoint': '',
+    }
+
+    # inference
+    model_container.inference(params_inference=params_inference)
